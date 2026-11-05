@@ -3,3 +3,7 @@ veri/*.db
 veri/kaynak/
 .pytest_cache/
 .venv/
+veri/indirilen/
+veri/takip_durum.json
+veri/*.db-*
+baslat.yeni.bat

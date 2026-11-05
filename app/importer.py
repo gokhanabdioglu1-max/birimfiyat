@@ -13,7 +13,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .db import baglan, katla
+from .db import baglan, donem_sira, katla
 
 POZ_RE = re.compile(r"^(?:[A-ZÇĞİÖŞÜ]{1,5}[.\-/ ]?)?\d{1,4}(?:[./\-]\d{1,5}){1,4}(?:/[A-Z0-9]{1,4})?[A-Z]?$")
 SAYI_RE = re.compile(r"^\d{1,3}(?:\.\d{3})*(?:,\d+)?$|^\d+(?:,\d+)?$|^\d+\.\d+$")
@@ -22,6 +22,28 @@ BIRIMLER = {
     "sa", "sa.", "saat", "gün", "gun", "ay", "lt", "l", "litre", "takım", "tk", "set", "kwh", "kw", "kva",
     "dm3", "dm³", "m²/ay", "m2/ay", "m3-km", "m³-km", "ton-km", "ton.km", "sefer", "nokta", "parça", "götürü",
 }
+
+
+@dataclass
+class Kalem:
+    grup: str | None
+    poz_no: str | None
+    tanim: str
+    birim: str | None
+    miktar: float | None
+    birim_fiyat: float | None
+    tutar: float | None
+
+
+@dataclass
+class Analiz:
+    poz_no: str
+    tanim: str
+    birim: str | None
+    kalemler: list
+    ara_toplam: float | None = None
+    kar_orani: float | None = None
+    fiyat: float | None = None
 
 
 @dataclass
@@ -163,49 +185,74 @@ def _kumele(degerler, tolerans):
 
 
 def _pdf_tablo_sayfasi(sayfa) -> list[Satir] | None:
+    """Tablo çizgileri olan bir sayfayı okur; çizgi yoksa None döner.
+
+    Sütun sayısı ve sırası sabit varsayılmaz: her sütunun rolü (poz no, tanım,
+    birim, fiyat) içeriğine bakılarak bulunur. Böylece inşaat, tesisat ve
+    elektrik listelerinin farklı düzenleri aynı kodla okunur.
+    """
     from collections import Counter
 
     dikey = [r for r in sayfa.rects if r["width"] < 2 and r["height"] > 2]
     yatay = [r for r in sayfa.rects if r["height"] < 2 and r["width"] > 2]
-    if len(dikey) < 5 or len(yatay) < 5:
+    if len(dikey) < 4 or len(yatay) < 5:
         return None
-    # Sütun sınırları: en sık görülen 5 dikey çizgi (sol kenar, poz|tanım, tanım|birim, birim|fiyat, sağ kenar)
-    xs = _kumele([x for x, _ in Counter(round(r["x0"]) for r in dikey).most_common(8)], 3)
-    if len(xs) < 5:
+    sayac = Counter(round(r["x0"]) for r in dikey)
+    esik = max(2, max(sayac.values()) * 0.25)  # tek tük kısa çizgileri (birleşik hücreler) yok say
+    sinir = _kumele([x for x, n in sayac.items() if n >= esik], 3)
+    if len(sinir) < 4:
         return None
-    xs = sorted(xs)[:5] if len(xs) == 5 else _en_iyi_5(xs, dikey)
-    sinir = xs  # [sol, poz/tanım, tanım/birim, birim/fiyat, sağ]
 
     ys = _kumele([r["top"] for r in yatay], 3)
     kelimeler = sayfa.extract_words(keep_blank_chars=False, use_text_flow=False)
-    sonuc = []
+    bantlar = []
     for ust, alt in zip(ys, ys[1:]):
-        bant = [w for w in kelimeler if ust <= (w["top"] + w["bottom"]) / 2 < alt]
-        if not bant:
-            continue
-        sutun = {0: [], 1: [], 2: [], 3: []}
-        for w in bant:
-            orta = (w["x0"] + w["x1"]) / 2
-            for i in range(4):
-                if sinir[i] - 2 <= orta < sinir[i + 1] + 2:
-                    sutun[i].append(w)
-                    break
-        poz = " ".join(w["text"] for w in sutun[0]).strip()
-        if not poz_mu(poz):
-            continue  # başlık / bölüm adı satırı
-        sonuc.append(Satir(poz, _satir_metni(sutun[1]), _satir_metni(sutun[2]) or None,
-                           sayi(_satir_metni(sutun[3]))))
+        hucre = [[] for _ in range(len(sinir) - 1)]
+        for w in kelimeler:
+            if ust <= (w["top"] + w["bottom"]) / 2 < alt:
+                orta = (w["x0"] + w["x1"]) / 2
+                for i in range(len(hucre)):
+                    if sinir[i] - 2 <= orta < sinir[i + 1] + 2:
+                        hucre[i].append(w)
+                        break
+        if any(hucre):
+            bantlar.append([_satir_metni(h) for h in hucre])
+
+    roller = _sutun_rolleri(bantlar)
+    if roller is None:
+        return None
+    p, t, b, f = roller
+    sonuc = []
+    for h in bantlar:
+        if poz_mu(h[p]):
+            sonuc.append(Satir(h[p], h[t], (h[b] if b is not None else "") or None, sayi(h[f])))
     return sonuc
 
 
-def _en_iyi_5(xs, dikey):
-    from collections import Counter
-    sayac = Counter()
-    for r in dikey:
-        for x in xs:
-            if abs(r["x0"] - x) <= 3:
-                sayac[x] += 1
-    return sorted(x for x, _ in sayac.most_common(5))
+def _sutun_rolleri(bantlar: list[list[str]]):
+    """Hangi sütunun poz no, tanım, birim ve fiyat olduğunu içerikten bulur."""
+    if not bantlar:
+        return None
+    n = len(bantlar[0])
+    poz_say = [sum(poz_mu(h[i]) for h in bantlar) for i in range(n)]
+    p = max(range(n), key=poz_say.__getitem__)
+    if poz_say[p] == 0:
+        return None
+    satirlar = [h for h in bantlar if poz_mu(h[p])]
+    birim_say = [sum(birim_mi(h[i]) or bool(re.fullmatch(r"\d+ \S+", h[i]) and birim_mi(h[i].split()[1]))
+                     for h in satirlar) if i != p else -1 for i in range(n)]
+    b = max(range(n), key=birim_say.__getitem__)
+    if birim_say[b] < len(satirlar) * 0.3:
+        b = None
+    sayisal = [i for i in range(n) if i not in (p, b) and sum(sayi(h[i]) is not None for h in satirlar) >= len(satirlar) * 0.3]
+    if not sayisal:
+        return None
+    f = max(sayisal)  # en sağdaki sayısal sütun: birim fiyat
+    kalan = [i for i in range(n) if i not in (p, b, f) and i not in sayisal]
+    if not kalan:
+        return None
+    t = max(kalan, key=lambda i: sum(len(h[i]) for h in satirlar))
+    return p, t, b, f
 
 
 def _satir_metni(kelimeler) -> str:
@@ -234,6 +281,13 @@ def _sayfa_ustu(satir: str) -> bool:
     return k.startswith(("poz no", "sayfa", "birim fiyat")) or bool(re.fullmatch(r"[\d\s/\-]+", satir))
 
 
+# ---------------------------------------------------------------- Analiz kitapları
+
+def analiz_oku(yol: Path) -> list[Analiz]:
+    """Analiz kitabını okur. Bakanlık analiz dosyasının biçimi görülünce yazılacak."""
+    raise NotImplementedError("Analiz okuyucu henüz hazır değil; dosya indirildi, platform güncellenince yüklenecek")
+
+
 # ---------------------------------------------------------------- Yükleme
 
 def tur_bul(kurum: str, poz_no: str) -> str | None:
@@ -251,16 +305,23 @@ def oku(yol: Path) -> list[Satir]:
     raise ValueError(f"Desteklenmeyen dosya türü: {uzanti}")
 
 
-def yukle(con, satirlar: list[Satir], kurum: str, yil: int, donem: str = "", dosya: str = "") -> int:
-    """Kaynağı (kurum+yıl+dönem) baştan yazar; eklenen poz sayısını döner."""
+def _kaynak_ac(con, kurum, yil, donem, liste, icerik, dosya) -> int:
+    """Aynı kaynak daha önce yüklendiyse siler, yenisini açar."""
+    eski = con.execute("SELECT id FROM kaynak WHERE kurum=? AND yil=? AND donem=? AND liste=? AND icerik=?",
+                       (kurum, yil, donem, liste, icerik)).fetchone()
+    if eski:
+        con.execute("DELETE FROM poz_fts WHERE rowid IN (SELECT id FROM poz WHERE kaynak_id=?)", (eski["id"],))
+        con.execute("DELETE FROM kaynak WHERE id=?", (eski["id"],))
+    return con.execute("INSERT INTO kaynak (kurum, yil, donem, liste, icerik, sira, dosya) VALUES (?,?,?,?,?,?,?)",
+                       (kurum, yil, donem, liste, icerik, donem_sira(yil, donem), dosya)).lastrowid
+
+
+def yukle(con, satirlar: list[Satir], kurum: str, yil: int, donem: str = "", dosya: str = "",
+          liste: str = "insaat") -> int:
+    """Bir birim fiyat listesini (kurum+yıl+dönem+liste) baştan yazar; eklenen poz sayısını döner."""
     kurum = kurum.upper()
     with con:
-        eski = con.execute("SELECT id FROM kaynak WHERE kurum=? AND yil=? AND donem=?", (kurum, yil, donem)).fetchone()
-        if eski:
-            con.execute("DELETE FROM poz_fts WHERE rowid IN (SELECT id FROM poz WHERE kaynak_id=?)", (eski["id"],))
-            con.execute("DELETE FROM kaynak WHERE id=?", (eski["id"],))
-        kid = con.execute("INSERT INTO kaynak (kurum, yil, donem, dosya) VALUES (?,?,?,?)",
-                          (kurum, yil, donem, dosya)).lastrowid
+        kid = _kaynak_ac(con, kurum, yil, donem, liste, "fiyat", dosya)
         eklenen = 0
         for s in satirlar:
             tanim = re.sub(r"\s+", " ", s.tanim).strip()
@@ -274,21 +335,43 @@ def yukle(con, satirlar: list[Satir], kurum: str, yil: int, donem: str = "", dos
     return eklenen
 
 
+def analiz_yukle(con, analizler: list["Analiz"], kurum: str, yil: int, donem: str = "", dosya: str = "",
+                 liste: str = "insaat") -> int:
+    """Bir analiz kitabını baştan yazar; eklenen analiz sayısını döner."""
+    kurum = kurum.upper()
+    with con:
+        kid = _kaynak_ac(con, kurum, yil, donem, liste, "analiz", dosya)
+        eklenen = 0
+        for a in analizler:
+            cur = con.execute("""INSERT OR IGNORE INTO analiz (kaynak_id, poz_no, tanim, birim, ara_toplam, kar_orani, fiyat)
+                                 VALUES (?,?,?,?,?,?,?)""",
+                              (kid, a.poz_no, a.tanim, a.birim, a.ara_toplam, a.kar_orani, a.fiyat))
+            if not cur.rowcount:
+                continue
+            con.executemany("""INSERT INTO analiz_kalem (analiz_id, sira, grup, poz_no, tanim, birim, miktar, birim_fiyat, tutar)
+                               VALUES (?,?,?,?,?,?,?,?,?)""",
+                            [(cur.lastrowid, i, k.grup, k.poz_no, k.tanim, k.birim, k.miktar, k.birim_fiyat, k.tutar)
+                             for i, k in enumerate(a.kalemler)])
+            eklenen += 1
+    return eklenen
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Birim fiyat dosyasını içe aktar")
     ap.add_argument("dosya", type=Path)
     ap.add_argument("--kurum", required=True, help="CSB, KGM, DSI, ILBANK ...")
     ap.add_argument("--yil", required=True, type=int)
     ap.add_argument("--donem", default="", help="Yıl içi güncelleme dönemi (ör. Eylül); boş = yıl başı")
+    ap.add_argument("--liste", default="insaat", choices=["insaat", "tesisat", "elektrik"])
     ap.add_argument("--db", default=None)
     a = ap.parse_args(argv)
 
     satirlar = oku(a.dosya)
     if not satirlar:
         sys.exit("Dosyada poz bulunamadı. Biçim desteklenmiyor olabilir.")
-    n = yukle(baglan(a.db), satirlar, a.kurum, a.yil, a.donem, a.dosya.name)
+    n = yukle(baglan(a.db), satirlar, a.kurum, a.yil, a.donem, a.dosya.name, a.liste)
     fiyatsiz = sum(1 for s in satirlar if s.fiyat is None)
-    print(f"{n} poz yüklendi ({a.kurum} {a.yil} {a.donem}). Fiyatı okunamayan: {fiyatsiz}")
+    print(f"{n} poz yüklendi ({a.kurum} {a.yil} {a.donem} {a.liste}). Fiyatı okunamayan: {fiyatsiz}")
 
 
 if __name__ == "__main__":

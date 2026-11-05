@@ -78,7 +78,7 @@ def test_yukle_ve_ara(con, tmp_path, monkeypatch):
     assert c.get("/api/ara", params={"q": "ALCI", "kaynak_id": k25}).json()["toplam"] == 1   # Türkçe karakter katlama
     assert c.get("/api/ara", params={"q": "15.150", "kaynak_id": k25}).json()["toplam"] == 1  # poz no öneki
     assert c.get("/api/ara", params={"kaynak_id": k25, "tur": "rayic"}).json()["toplam"] == 1
-    g = c.get("/api/poz/15.150.9001").json()
+    g = c.get("/api/poz/15.150.9001").json()["gecmis"]
     assert [x["fiyat"] for x in g] == [1000.0, 1300.0]
     assert c.get("/").status_code == 200
 
@@ -87,7 +87,7 @@ def test_hazir_csb_listesi(con):
     """Repodaki CSB 2026 Kasım listesi: PDF'ten okunan 1878 pozun tamamı yüklenmeli."""
     from app.kur import hepsini_yukle
     hepsini_yukle(con)
-    k = con.execute("SELECT id FROM kaynak WHERE kurum='CSB' AND yil=2026 AND donem='Kasım'").fetchone()
+    k = con.execute("SELECT id FROM kaynak WHERE kurum='CSB' AND yil=2026 AND donem='Kasım' AND liste='insaat'").fetchone()
     assert k
     assert con.execute("SELECT COUNT(*) FROM poz WHERE kaynak_id=?", (k["id"],)).fetchone()[0] == 1878
     r = con.execute("SELECT birim, fiyat FROM poz WHERE kaynak_id=? AND poz_no='15.100.1001'", (k["id"],)).fetchone()

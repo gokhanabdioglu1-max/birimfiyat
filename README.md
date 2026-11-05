@@ -28,21 +28,38 @@ docker build -t birimfiyat .
 docker run -d -p 8000:8000 -v birimfiyat-veri:/data birimfiyat
 ```
 
-## Hazır veriler
-`veri/csv/` klasöründeki listeler uygulama ilk açıldığında kendiliğinden yüklenir:
+## Otomatik güncelleme
+`baslat.bat` her açılışta iki şeyi kendiliğinden yapar:
+
+1. **Platformu günceller:** GitHub'daki en yeni sürümü indirir (repo herkese açık olmalı).
+   Veriler ve kurulum korunur. İnternet yoksa mevcut sürümle açılır.
+2. **Bakanlık sitesini kontrol eder:** Platform açıldıktan sonra arka planda
+   yfk.csb.gov.tr taranır. Yeni inşaat, tesisat veya elektrik listesi (yıl başı ya da
+   aylık güncel fiyat) ya da analiz kitabı varsa indirilir, kontrol edilir ve yüklenir.
+   Ekranın üstünde son kontrol zamanı ve sonucu görünür; **Güncellemeleri kontrol et**
+   düğmesiyle elle de başlatılabilir.
+
+Kontroller: 100'den az poz okunan ya da pozlarının %5'inden fazlasının fiyatı okunamayan
+dosyalar yüklenmez, ekranda uyarı çıkar. Mevcut veriler hiçbir durumda silinmez.
+Takip ayarları (taranacak sayfalar vb.) `veri/takip_ayar.json` ile değiştirilebilir.
+Elle çalıştırmak için: `python -m app.takip`
+
+## Veriler
+`veri/csv/` klasöründeki listeler veritabanına kendiliğinden yüklenir. Veritabanı
+(`veri/birimfiyat.db`) sadece bir önbellektir, silinirse bu klasörden yeniden kurulur.
+
+Dosya adı biçimi: `KURUM_YIL_DONEM_LISTE.csv`, analizler için `..._analiz.csv`
+(DONEM: `Yilbasi`, `Ocak` … `Aralik`; LISTE: `insaat`, `tesisat`, `elektrik`).
 
 | Dosya | Kaynak | Poz |
 |---|---|---|
-| `CSB_2026_Kasim.csv` | ÇŞİDB 2026 Kasım ayı güncel inşaat birim fiyat listesi (TÜİK endeksleriyle) | 1.878 |
-
-Dosya adı biçimi `KURUM_YIL_DONEM.csv`. Yeni bir liste eklemek için PDF/Excel'i içe aktarıp
-(aşağıya bakın) CSV olarak bu klasöre koymak yeterli. Elle yüklemek için: `python -m app.kur`
+| `CSB_2026_Kasim_insaat.csv` | ÇŞİDB 2026 Kasım ayı güncel inşaat birim fiyatları (TÜİK endeksleriyle) | 1.878 |
 
 ## Veri yükleme
 Bakanlığın (ÇŞİDB Yüksek Fen Kurulu) yayımladığı birim fiyat dosyasını indirip:
 ```bash
-python -m app.importer "2026 Birim Fiyatlar.xlsx" --kurum CSB --yil 2026
-python -m app.importer "2026 Eylul Guncel.pdf"    --kurum CSB --yil 2026 --donem Eylül
+python -m app.importer "2026 Birim Fiyatlar.xlsx" --kurum CSB --yil 2026 --liste insaat
+python -m app.importer "2026 Eylul Elektrik.pdf"  --kurum CSB --yil 2026 --donem Eylül --liste elektrik
 ```
 Docker'da: `docker exec -it <konteyner> python -m app.importer /data/dosya.xlsx --kurum CSB --yil 2026`
 

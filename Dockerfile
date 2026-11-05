@@ -4,6 +4,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app app
 COPY static static
+COPY veri/csv veri/csv
 ENV BF_DB=/data/birimfiyat.db
 VOLUME /data
 EXPOSE 8000

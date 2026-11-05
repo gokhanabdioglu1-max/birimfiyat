@@ -10,7 +10,16 @@
   body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--yazi); }
   header { background:#16325c; color:#fff; padding:12px 20px; display:flex; align-items:center; gap:16px; }
   header h1 { font-size:17px; margin:0; font-weight:600; }
-  header .kaynak { margin-left:auto; font-size:12px; opacity:.85; }
+  header .takip { margin-left:auto; font-size:12px; display:flex; align-items:center; gap:10px; }
+  header .takip span { opacity:.85; }
+  header .takip button { background:transparent; border-color:rgba(255,255,255,.6); color:#fff; }
+  header .takip button:disabled { opacity:.6; cursor:default; }
+  .uyari { background:#fff4e5; border:1px solid #f5c27a; color:#7a4a00; padding:8px 12px; border-radius:6px; margin:12px 20px 0; font-size:13px; }
+  .yeni { background:#e8f6ec; border-color:#9fd5ad; color:#1d5e2f; }
+  .analiz td, .analiz th { font-size:12.5px; padding:5px 6px; }
+  .analiz tr.grup td { background:#fafbfc; font-weight:600; color:var(--soluk); }
+  .analiz tr.ozet td { font-weight:600; }
+  .rozet.analiz-var { background:#e8f0fc; color:var(--ana); }
   main { display:grid; grid-template-columns: 1fr 420px; gap:16px; padding:16px 20px; }
   @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
   .kart { background:var(--kart); border:1px solid var(--cizgi); border-radius:8px; padding:14px; }
@@ -49,14 +58,22 @@
 <body>
 <header>
   <h1>Birim Fiyat Platformu</h1>
-  <span class="kaynak" id="kaynakBilgi"></span>
+  <div class="takip"><span id="takipBilgi"></span>
+    <button class="kucuk" id="takipDugme" onclick="takipBaslat()" title="Bakanlık sitesinde yeni liste var mı bak">Güncellemeleri kontrol et</button></div>
 </header>
+<div id="takipUyari" class="uyari" hidden></div>
 
 <main>
   <section class="kart" id="aramaKart">
     <div class="arama">
       <input type="search" id="q" placeholder="Poz no veya tanım ara… (ör. 15.150.1005, C30 beton, alçı sıva)" autofocus>
-      <select id="kaynak" title="Kurum / yıl"></select>
+      <select id="liste" title="Liste">
+        <option value="">Tüm listeler</option>
+        <option value="insaat">İnşaat</option>
+        <option value="tesisat">Tesisat</option>
+        <option value="elektrik">Elektrik</option>
+      </select>
+      <select id="kaynak" title="Dönem"></select>
       <select id="tur" title="Tür">
         <option value="">Tümü</option>
         <option value="birim_fiyat">Birim fiyat</option>
@@ -100,19 +117,24 @@ const TL = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFra
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const SAYFA = 50;
+const LISTE = { insaat: 'İnşaat', tesisat: 'Tesisat', elektrik: 'Elektrik' };
+const sayiYaz = (n, b = 2) => n == null ? '' : new Intl.NumberFormat('tr-TR', { minimumFractionDigits: b, maximumFractionDigits: b }).format(n);
 let sayfa = 0, sonSonuclar = [];
 
 // ---- Kaynaklar
 async function kaynaklariYukle() {
-  const ks = await (await fetch('/api/kaynaklar')).json();
-  const sec = $('#kaynak');
+  const ks = (await (await fetch('/api/kaynaklar')).json()).filter(k => k.icerik === 'fiyat');
+  const sec = $('#kaynak'), secili = sec.value;
   if (!ks.length) {
     sec.innerHTML = '<option value="">Veri yok</option>';
     $('#sonuclar').innerHTML = '<tr><td colspan="5" class="bos">Henüz birim fiyat verisi yüklenmemiş. README\'deki içe aktarma adımına bakın.</td></tr>';
     return;
   }
-  sec.innerHTML = ks.map(k => `<option value="${k.id}">${esc(k.kurum)} ${k.yil}${k.donem ? ' ' + esc(k.donem) : ''} (${k.poz_sayisi} poz)</option>`).join('');
-  $('#kaynakBilgi').textContent = `Güncel kaynak: ${ks[0].kurum} ${ks[0].yil}${ks[0].donem ? ' ' + ks[0].donem : ''}`;
+  const guncel = ks.filter(k => k.guncel).map(k => `${k.liste_adi} ${k.yil}${k.donem ? ' ' + k.donem : ''}`).join(', ');
+  sec.innerHTML = `<option value="">Güncel fiyatlar</option>` + ks.map(k =>
+    `<option value="${k.id}">${esc(k.liste_adi)} ${k.yil}${k.donem ? ' ' + esc(k.donem) : ' yıl başı'} (${k.poz_sayisi} poz)</option>`).join('');
+  sec.value = [...sec.options].some(o => o.value === secili) ? secili : '';
+  sec.title = 'Güncel: ' + guncel;
   ara();
 }
 
@@ -123,13 +145,15 @@ function araGecikmeli() { clearTimeout(zamanlayici); zamanlayici = setTimeout(()
 async function ara() {
   const p = new URLSearchParams({ q: $('#q').value, limit: SAYFA, offset: sayfa * SAYFA });
   if ($('#kaynak').value) p.set('kaynak_id', $('#kaynak').value);
+  if ($('#liste').value) p.set('liste', $('#liste').value);
   if ($('#tur').value) p.set('tur', $('#tur').value);
   const r = await (await fetch('/api/ara?' + p)).json();
   sonSonuclar = r.sonuclar;
   $('#sonucBilgi').textContent = `${r.toplam.toLocaleString('tr-TR')} sonuç`;
   $('#sonuclar').innerHTML = r.sonuclar.length ? r.sonuclar.map((s, i) => `
     <tr class="satir" onclick="detayGoster('${esc(s.poz_no)}')">
-      <td class="poz">${esc(s.poz_no)}${s.tur === 'rayic' ? '<span class="rozet">rayiç</span>' : ''}</td>
+      <td class="poz">${esc(s.poz_no)}${s.tur === 'rayic' ? '<span class="rozet">rayiç</span>' : ''}${s.analiz_var ? '<span class="rozet analiz-var">analiz</span>' : ''}
+        <div class="bilgi" style="margin:2px 0 0;font-family:system-ui,sans-serif">${LISTE[s.liste] || ''} ${s.yil} ${esc(s.donem)}</div></td>
       <td class="tanim">${esc(s.tanim)}</td>
       <td>${esc(s.birim)}</td>
       <td class="sayi">${s.fiyat != null ? TL.format(s.fiyat) : '—'}</td>
@@ -142,21 +166,57 @@ async function ara() {
     <button class="ikincil kucuk" ${sayfa >= sayfaSay - 1 ? 'disabled' : ''} onclick="sayfa++; ara()">Sonraki ›</button>` : '';
 }
 
-// ---- Poz detayı: yıllar arası fiyat
+// ---- Poz detayı: yıllar arası fiyat ve analiz
 async function detayGoster(pozNo) {
-  const r = await (await fetch('/api/poz/' + encodeURIComponent(pozNo))).json();
-  const son = r[r.length - 1];
-  $('#detayIcerik').innerHTML = `
-    <h3 style="margin-top:0">${esc(son.poz_no)} <span class="rozet">${esc(son.birim)}</span></h3>
-    <p>${esc(son.tanim)}</p>
-    <table><thead><tr><th>Kaynak</th><th class="sayi">Birim Fiyat (TL)</th><th class="sayi">Değişim</th></tr></thead><tbody>
+  const { gecmis: r, analiz } = await (await fetch('/api/poz/' + encodeURIComponent(pozNo))).json();
+  const son = r[r.length - 1] || analiz;
+  let h = `<h3 style="margin-top:0">${esc(son.poz_no)} <span class="rozet">${esc(son.birim)}</span></h3><p>${esc(son.tanim)}</p>`;
+  if (r.length) h += `
+    <table><thead><tr><th>Liste / dönem</th><th class="sayi">Birim Fiyat (TL)</th><th class="sayi">Değişim</th></tr></thead><tbody>
     ${r.map((x, i) => {
       const onceki = i ? r[i - 1].fiyat : null;
       const deg = onceki && x.fiyat ? ((x.fiyat / onceki - 1) * 100).toFixed(1).replace('.', ',') + ' %' : '';
-      return `<tr><td>${esc(x.kurum)} ${x.yil} ${esc(x.donem)}</td><td class="sayi">${x.fiyat != null ? TL.format(x.fiyat) : '—'}</td><td class="sayi">${deg}</td></tr>`;
+      return `<tr><td>${LISTE[x.liste] || ''} ${x.yil} ${x.donem ? esc(x.donem) : 'yıl başı'}</td><td class="sayi">${x.fiyat != null ? TL.format(x.fiyat) : '—'}</td><td class="sayi">${deg}</td></tr>`;
     }).join('')}</tbody></table>`;
+  if (analiz) {
+    let grup = null;
+    h += `<h4 style="margin:18px 0 6px">Analiz (${analiz.yil} ${analiz.donem || 'yıl başı'})</h4>
+      <table class="analiz"><thead><tr><th>Poz No</th><th>Tanım</th><th>Birim</th><th class="sayi">Miktar</th><th class="sayi">Birim Fiyat</th><th class="sayi">Tutar</th></tr></thead><tbody>
+      ${analiz.kalemler.map(k => {
+        const baslik = k.grup && k.grup !== grup ? `<tr class="grup"><td colspan="6">${esc(grup = k.grup)}</td></tr>` : '';
+        return baslik + `<tr><td class="poz">${esc(k.poz_no)}</td><td>${esc(k.tanim)}</td><td>${esc(k.birim)}</td>
+          <td class="sayi">${sayiYaz(k.miktar, 3)}</td><td class="sayi">${sayiYaz(k.birim_fiyat)}</td><td class="sayi">${sayiYaz(k.tutar)}</td></tr>`;
+      }).join('')}
+      ${analiz.ara_toplam != null ? `<tr class="ozet"><td colspan="5">Malzeme + İşçilik</td><td class="sayi">${sayiYaz(analiz.ara_toplam)}</td></tr>` : ''}
+      ${analiz.kar_orani != null && analiz.ara_toplam != null ? `<tr class="ozet"><td colspan="5">%${sayiYaz(analiz.kar_orani * 100, 0)} Yüklenici kârı ve genel giderler</td><td class="sayi">${sayiYaz(analiz.ara_toplam * analiz.kar_orani)}</td></tr>` : ''}
+      ${analiz.fiyat != null ? `<tr class="ozet"><td colspan="5">1 ${esc(analiz.birim)} fiyatı</td><td class="sayi">${sayiYaz(analiz.fiyat)}</td></tr>` : ''}
+      </tbody></table>`;
+  }
+  $('#detayIcerik').innerHTML = h;
   $('#detay').showModal();
 }
+
+// ---- Bakanlık sitesi takibi
+const tarihYaz = t => t ? new Date(t).toLocaleString('tr-TR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
+async function takipGoster() {
+  let d;
+  try { d = await (await fetch('/api/takip')).json(); } catch { return; }
+  const dugme = $('#takipDugme'), uyari = $('#takipUyari');
+  dugme.disabled = d.calisiyor;
+  dugme.textContent = d.calisiyor ? 'Kontrol ediliyor…' : 'Güncellemeleri kontrol et';
+  $('#takipBilgi').textContent = d.son_kontrol ? 'Son kontrol: ' + tarihYaz(d.son_kontrol) : 'Bakanlık sitesi henüz kontrol edilmedi';
+  const o = d.son_ozet;
+  uyari.hidden = true;
+  if (!d.calisiyor && o && o.yeni.length) {
+    uyari.className = 'uyari yeni'; uyari.hidden = false;
+    uyari.innerHTML = `<b>${o.yeni.length} yeni liste yüklendi:</b> ${o.yeni.map(esc).join(' · ')}`;
+  } else if (!d.calisiyor && o && o.hatalar.length) {
+    uyari.className = 'uyari'; uyari.hidden = false;
+    uyari.innerHTML = `<b>Bakanlık sitesi kontrolünde sorun:</b> ${o.hatalar.slice(0, 3).map(esc).join(' · ')}`;
+  }
+  if (d.calisiyor) setTimeout(async () => { await takipGoster(); if (!$('#takipDugme').disabled) kaynaklariYukle(); }, 3000);
+}
+async function takipBaslat() { await fetch('/api/takip', { method: 'POST' }); takipGoster(); }
 
 // ---- Keşif (tarayıcıda saklanır)
 let kesif = [];
@@ -165,7 +225,7 @@ const kaydet = () => { try { localStorage.setItem('kesif', JSON.stringify(kesif)
 
 function kesifeEkle(i) {
   const s = sonSonuclar[i];
-  const kaynak = `${s.kurum} ${s.yil}${s.donem ? ' ' + s.donem : ''}`;
+  const kaynak = `${LISTE[s.liste] || s.kurum} ${s.yil}${s.donem ? ' ' + s.donem : ''}`;
   if (kesif.some(k => k.poz_no === s.poz_no && k.kaynak === kaynak)) return;
   kesif.push({ poz_no: s.poz_no, tanim: s.tanim, birim: s.birim, fiyat: s.fiyat || 0, kaynak, miktar: 1 });
   kaydet(); kesifCiz();
@@ -209,10 +269,12 @@ function excelIndir() {
 
 $('#q').addEventListener('input', araGecikmeli);
 $('#kaynak').addEventListener('change', () => { sayfa = 0; ara(); });
+$('#liste').addEventListener('change', () => { sayfa = 0; ara(); });
 $('#tur').addEventListener('change', () => { sayfa = 0; ara(); });
 $('#kesifAdi').addEventListener('input', kaydet);
 kesifCiz();
 kaynaklariYukle();
+takipGoster();
 </script>
 </body>
 </html>
