@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Birim Fiyat Platformu</title>
+<style>
+  :root { --bg:#f6f7f9; --kart:#fff; --yazi:#1d2330; --soluk:#667085; --cizgi:#e4e7ec; --ana:#1f5fbf; --ana2:#e8f0fc; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--yazi); }
+  header { background:#16325c; color:#fff; padding:12px 20px; display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header .kaynak { margin-left:auto; font-size:12px; opacity:.85; }
+  main { display:grid; grid-template-columns: 1fr 420px; gap:16px; padding:16px 20px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  .kart { background:var(--kart); border:1px solid var(--cizgi); border-radius:8px; padding:14px; }
+  .arama { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .arama input[type=search] { flex:1; min-width:220px; padding:9px 12px; font-size:15px; border:1px solid var(--cizgi); border-radius:6px; }
+  select, input, button { font:inherit; }
+  select { padding:8px; border:1px solid var(--cizgi); border-radius:6px; background:#fff; }
+  button { padding:7px 12px; border:1px solid var(--ana); background:var(--ana); color:#fff; border-radius:6px; cursor:pointer; }
+  button.ikincil { background:#fff; color:var(--ana); }
+  button.kucuk { padding:3px 8px; font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--cizgi); vertical-align:top; }
+  th { font-size:12px; color:var(--soluk); font-weight:600; background:#fafbfc; position:sticky; top:0; }
+  td.sayi, th.sayi { text-align:right; white-space:nowrap; font-variant-numeric: tabular-nums; }
+  td.poz { white-space:nowrap; font-family: ui-monospace, Consolas, monospace; font-size:13px; }
+  tr.satir:hover { background:var(--ana2); cursor:pointer; }
+  .tanim { max-width:640px; }
+  .rozet { font-size:11px; padding:1px 6px; border-radius:10px; background:#eef1f5; color:var(--soluk); margin-left:4px; }
+  .bilgi { color:var(--soluk); font-size:12px; margin:6px 0; }
+  .bos { color:var(--soluk); padding:30px; text-align:center; }
+  .kesif-ust { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .kesif-ust h2 { font-size:15px; margin:0; }
+  .kesif-ust .bosluk { flex:1; }
+  #kesif input.miktar { width:80px; text-align:right; padding:4px; border:1px solid var(--cizgi); border-radius:4px; }
+  .toplam td { font-weight:600; border-bottom:none; }
+  dialog { border:none; border-radius:10px; max-width:760px; width:92vw; padding:20px; }
+  dialog::backdrop { background:rgba(0,0,0,.35); }
+  .sayfalama { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin-top:8px; }
+  @media print {
+    header, #aramaKart, .kesif-ust button, .sil, #kdvSatir select { display:none !important; }
+    main { display:block; padding:0; } .kart { border:none; }
+    #kesif input.miktar { border:none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Birim Fiyat Platformu</h1>
+  <span class="kaynak" id="kaynakBilgi"></span>
+</header>
+
+<main>
+  <section class="kart" id="aramaKart">
+    <div class="arama">
+      <input type="search" id="q" placeholder="Poz no veya tanım ara… (ör. 15.150.1005, C30 beton, alçı sıva)" autofocus>
+      <select id="kaynak" title="Kurum / yıl"></select>
+      <select id="tur" title="Tür">
+        <option value="">Tümü</option>
+        <option value="birim_fiyat">Birim fiyat</option>
+        <option value="rayic">Rayiç</option>
+      </select>
+    </div>
+    <div class="bilgi" id="sonucBilgi"></div>
+    <div style="max-height:calc(100vh - 210px); overflow:auto">
+      <table>
+        <thead><tr><th>Poz No</th><th>Tanım</th><th>Birim</th><th class="sayi">Birim Fiyat (TL)</th><th></th></tr></thead>
+        <tbody id="sonuclar"></tbody>
+      </table>
+    </div>
+    <div class="sayfalama" id="sayfalama"></div>
+  </section>
+
+  <section class="kart">
+    <div class="kesif-ust">
+      <h2>Keşif / Yaklaşık Maliyet</h2>
+      <span class="bosluk"></span>
+      <button class="ikincil kucuk" onclick="excelIndir()">Excel</button>
+      <button class="ikincil kucuk" onclick="window.print()">Yazdır</button>
+      <button class="ikincil kucuk" onclick="kesifTemizle()">Temizle</button>
+    </div>
+    <input id="kesifAdi" placeholder="İş adı" style="width:100%;padding:6px 8px;border:1px solid var(--cizgi);border-radius:6px;margin-bottom:8px">
+    <table id="kesif">
+      <thead><tr><th>Poz</th><th class="sayi">Miktar</th><th class="sayi">Tutar</th><th></th></tr></thead>
+      <tbody></tbody>
+      <tfoot></tfoot>
+    </table>
+  </section>
+</main>
+
+<dialog id="detay">
+  <div id="detayIcerik"></div>
+  <div style="text-align:right;margin-top:12px"><button onclick="detay.close()">Kapat</button></div>
+</dialog>
+
+<script>
+const TL = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const SAYFA = 50;
+let sayfa = 0, sonSonuclar = [];
+
+// ---- Kaynaklar
+async function kaynaklariYukle() {
+  const ks = await (await fetch('/api/kaynaklar')).json();
+  const sec = $('#kaynak');
+  if (!ks.length) {
+    sec.innerHTML = '<option value="">Veri yok</option>';
+    $('#sonuclar').innerHTML = '<tr><td colspan="5" class="bos">Henüz birim fiyat verisi yüklenmemiş. README\'deki içe aktarma adımına bakın.</td></tr>';
+    return;
+  }
+  sec.innerHTML = ks.map(k => `<option value="${k.id}">${esc(k.kurum)} ${k.yil}${k.donem ? ' ' + esc(k.donem) : ''} (${k.poz_sayisi} poz)</option>`).join('');
+  $('#kaynakBilgi').textContent = `Güncel kaynak: ${ks[0].kurum} ${ks[0].yil}${ks[0].donem ? ' ' + ks[0].donem : ''}`;
+  ara();
+}
+
+// ---- Arama
+let zamanlayici;
+function araGecikmeli() { clearTimeout(zamanlayici); zamanlayici = setTimeout(() => { sayfa = 0; ara(); }, 220); }
+
+async function ara() {
+  const p = new URLSearchParams({ q: $('#q').value, limit: SAYFA, offset: sayfa * SAYFA });
+  if ($('#kaynak').value) p.set('kaynak_id', $('#kaynak').value);
+  if ($('#tur').value) p.set('tur', $('#tur').value);
+  const r = await (await fetch('/api/ara?' + p)).json();
+  sonSonuclar = r.sonuclar;
+  $('#sonucBilgi').textContent = `${r.toplam.toLocaleString('tr-TR')} sonuç`;
+  $('#sonuclar').innerHTML = r.sonuclar.length ? r.sonuclar.map((s, i) => `
+    <tr class="satir" onclick="detayGoster('${esc(s.poz_no)}')">
+      <td class="poz">${esc(s.poz_no)}${s.tur === 'rayic' ? '<span class="rozet">rayiç</span>' : ''}</td>
+      <td class="tanim">${esc(s.tanim)}</td>
+      <td>${esc(s.birim)}</td>
+      <td class="sayi">${s.fiyat != null ? TL.format(s.fiyat) : '—'}</td>
+      <td><button class="kucuk" onclick="event.stopPropagation(); kesifeEkle(${i})">+ Keşif</button></td>
+    </tr>`).join('') : '<tr><td colspan="5" class="bos">Sonuç bulunamadı</td></tr>';
+  const sayfaSay = Math.ceil(r.toplam / SAYFA);
+  $('#sayfalama').innerHTML = sayfaSay > 1 ? `
+    <button class="ikincil kucuk" ${sayfa === 0 ? 'disabled' : ''} onclick="sayfa--; ara()">‹ Önceki</button>
+    <span class="bilgi">${sayfa + 1} / ${sayfaSay}</span>
+    <button class="ikincil kucuk" ${sayfa >= sayfaSay - 1 ? 'disabled' : ''} onclick="sayfa++; ara()">Sonraki ›</button>` : '';
+}
+
+// ---- Poz detayı: yıllar arası fiyat
+async function detayGoster(pozNo) {
+  const r = await (await fetch('/api/poz/' + encodeURIComponent(pozNo))).json();
+  const son = r[r.length - 1];
+  $('#detayIcerik').innerHTML = `
+    <h3 style="margin-top:0">${esc(son.poz_no)} <span class="rozet">${esc(son.birim)}</span></h3>
+    <p>${esc(son.tanim)}</p>
+    <table><thead><tr><th>Kaynak</th><th class="sayi">Birim Fiyat (TL)</th><th class="sayi">Değişim</th></tr></thead><tbody>
+    ${r.map((x, i) => {
+      const onceki = i ? r[i - 1].fiyat : null;
+      const deg = onceki && x.fiyat ? ((x.fiyat / onceki - 1) * 100).toFixed(1).replace('.', ',') + ' %' : '';
+      return `<tr><td>${esc(x.kurum)} ${x.yil} ${esc(x.donem)}</td><td class="sayi">${x.fiyat != null ? TL.format(x.fiyat) : '—'}</td><td class="sayi">${deg}</td></tr>`;
+    }).join('')}</tbody></table>`;
+  $('#detay').showModal();
+}
+
+// ---- Keşif (tarayıcıda saklanır)
+let kesif = [];
+try { kesif = JSON.parse(localStorage.getItem('kesif') || '[]'); $('#kesifAdi').value = localStorage.getItem('kesifAdi') || ''; } catch {}
+const kaydet = () => { try { localStorage.setItem('kesif', JSON.stringify(kesif)); localStorage.setItem('kesifAdi', $('#kesifAdi').value); } catch {} };
+
+function kesifeEkle(i) {
+  const s = sonSonuclar[i];
+  const kaynak = `${s.kurum} ${s.yil}${s.donem ? ' ' + s.donem : ''}`;
+  if (kesif.some(k => k.poz_no === s.poz_no && k.kaynak === kaynak)) return;
+  kesif.push({ poz_no: s.poz_no, tanim: s.tanim, birim: s.birim, fiyat: s.fiyat || 0, kaynak, miktar: 1 });
+  kaydet(); kesifCiz();
+}
+function miktarDegis(i, v) { kesif[i].miktar = parseFloat(String(v).replace(/\./g, '').replace(',', '.')) || 0; kaydet(); kesifCiz(false); }
+function kesifSil(i) { kesif.splice(i, 1); kaydet(); kesifCiz(); }
+function kesifTemizle() { if (confirm('Keşif listesi temizlensin mi?')) { kesif = []; kaydet(); kesifCiz(); } }
+
+function kesifCiz(govdeyiCiz = true) {
+  if (govdeyiCiz) $('#kesif tbody').innerHTML = kesif.length ? kesif.map((k, i) => `
+    <tr>
+      <td><div class="poz">${esc(k.poz_no)}</div><div class="bilgi" style="margin:2px 0">${esc(k.tanim.slice(0, 90))}${k.tanim.length > 90 ? '…' : ''}</div>
+          <div class="bilgi" style="margin:0">${TL.format(k.fiyat)} TL / ${esc(k.birim)} · ${esc(k.kaynak)}</div></td>
+      <td class="sayi"><input class="miktar" value="${String(k.miktar).replace('.', ',')}" onchange="miktarDegis(${i}, this.value)"> <div class="bilgi">${esc(k.birim)}</div></td>
+      <td class="sayi" id="tutar${i}">${TL.format(k.fiyat * k.miktar)}</td>
+      <td><button class="ikincil kucuk sil" onclick="kesifSil(${i})">×</button></td>
+    </tr>`).join('') : '<tr><td colspan="4" class="bos">Arama sonuçlarından “+ Keşif” ile poz ekleyin</td></tr>';
+  kesif.forEach((k, i) => { const h = document.getElementById('tutar' + i); if (h) h.textContent = TL.format(k.fiyat * k.miktar); });
+  const ara_ = kesif.reduce((t, k) => t + k.fiyat * k.miktar, 0);
+  const kdv = parseFloat(localStorage.getItem('kdv') ?? '20');
+  $('#kesif tfoot').innerHTML = kesif.length ? `
+    <tr class="toplam"><td colspan="2">Toplam (KDV hariç)</td><td class="sayi">${TL.format(ara_)}</td><td></td></tr>
+    <tr class="toplam" id="kdvSatir"><td colspan="2">KDV <select onchange="localStorage.setItem('kdv', this.value); kesifCiz(false)">
+      ${[0, 1, 10, 20].map(o => `<option ${o === kdv ? 'selected' : ''}>${o}</option>`).join('')}</select> %</td>
+      <td class="sayi">${TL.format(ara_ * kdv / 100)}</td><td></td></tr>
+    <tr class="toplam"><td colspan="2">Genel Toplam</td><td class="sayi">${TL.format(ara_ * (1 + kdv / 100))}</td><td></td></tr>` : '';
+}
+
+function excelIndir() {
+  // Türkçe Excel'in doğrudan açabildiği ; ayraçlı, UTF-8 BOM'lu CSV
+  const sayi = n => n.toFixed(2).replace('.', ',');
+  const satirlar = [['Sıra', 'Poz No', 'Tanım', 'Birim', 'Miktar', 'Birim Fiyat', 'Tutar', 'Kaynak']];
+  kesif.forEach((k, i) => satirlar.push([i + 1, k.poz_no, k.tanim, k.birim, sayi(k.miktar), sayi(k.fiyat), sayi(k.fiyat * k.miktar), k.kaynak]));
+  satirlar.push(['', '', 'TOPLAM (KDV hariç)', '', '', '', sayi(kesif.reduce((t, k) => t + k.fiyat * k.miktar, 0)), '']);
+  const csv = satirlar.map(r => r.map(h => `"${String(h ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = ($('#kesifAdi').value || 'kesif') + '.csv';
+  a.click();
+}
+
+$('#q').addEventListener('input', araGecikmeli);
+$('#kaynak').addEventListener('change', () => { sayfa = 0; ara(); });
+$('#tur').addEventListener('change', () => { sayfa = 0; ara(); });
+$('#kesifAdi').addEventListener('input', kaydet);
+kesifCiz();
+kaynaklariYukle();
+</script>
+</body>
+</html>
