@@ -2,3 +2,4 @@ __pycache__/
 veri/*.db
 veri/kaynak/
 .pytest_cache/
+.venv/
