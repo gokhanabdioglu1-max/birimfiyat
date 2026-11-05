@@ -1,4 +1,5 @@
 """Poz arama API'si ve web arayüzü."""
+import os
 import re
 from pathlib import Path
 
@@ -7,10 +8,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .db import baglan, katla
+from .kur import hepsini_yukle
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 app = FastAPI(title="Birim Fiyat Platformu")
 con = baglan()
+if os.environ.get("BF_OTOMATIK_YUKLE", "1") == "1":
+    hepsini_yukle(con, sadece_eksikler=True)  # repodaki hazır listeler veritabanında yoksa yükle
 
 
 def _fts_sorgu(q: str) -> str:
@@ -39,15 +43,20 @@ def ara(q: str = Query("", max_length=200), kaynak_id: int | None = None, tur: s
         kosul.append("p.tur = ?"); param.append(tur)
 
     sorgu = _fts_sorgu(q) if q.strip() else ""
+    katilim, sira = "", "p.poz_no"
     if sorgu:
-        kosul.append("p.id IN (SELECT rowid FROM poz_fts WHERE poz_fts MATCH ?)"); param.append(sorgu)
+        katilim = "JOIN poz_fts f ON f.rowid = p.id AND poz_fts MATCH ?"
+        param.insert(0, sorgu)
+        # poz no ile başlayan aramada önce o pozlar, yoksa en ilgili tanımlar
+        sira = "CASE WHEN p.poz_no LIKE ? THEN 0 ELSE 1 END, bm25(poz_fts, 10.0, 1.0), p.poz_no"
     where = " AND ".join(kosul)
-    toplam = con.execute(f"SELECT COUNT(*) FROM poz p WHERE {where}", param).fetchone()[0]
+    toplam = con.execute(f"SELECT COUNT(*) FROM poz p {katilim} WHERE {where}", param).fetchone()[0]
+    sira_param = [q.strip() + "%"] if sorgu else []
     rows = con.execute(f"""SELECT p.id, p.poz_no, p.tanim, p.birim, p.fiyat, p.tur, k.kurum, k.yil, k.donem
-                           FROM poz p JOIN kaynak k ON k.id = p.kaynak_id
+                           FROM poz p {katilim} JOIN kaynak k ON k.id = p.kaynak_id
                            WHERE {where}
-                           ORDER BY CASE WHEN p.poz_no LIKE ? THEN 0 ELSE 1 END, p.poz_no
-                           LIMIT ? OFFSET ?""", [*param, q.strip() + "%", limit, offset]).fetchall()
+                           ORDER BY {sira}
+                           LIMIT ? OFFSET ?""", [*param, *sira_param, limit, offset]).fetchall()
     return {"toplam": toplam, "sonuclar": [dict(r) for r in rows]}
 
 

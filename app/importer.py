@@ -134,26 +134,98 @@ PDF_SATIR_RE = re.compile(
 
 
 def pdf_oku(yol: Path) -> list[Satir]:
-    """Metin tabanlı PDF'lerde 'POZ TANIM BİRİM FİYAT' satırlarını okur.
+    """PDF birim fiyat listesini okur.
 
-    Satıra sığmayan uzun tanımlar bir sonraki satırlarda devam eder; bunlar
-    önceki pozun tanımına eklenir.
+    Tablo çizgileri olan sayfalarda (Bakanlık listeleri böyle) her satır, yatay
+    kenarlıklar arasındaki bant olarak okunur; böylece poz numarasının üstüne
+    ve altına taşan uzun tanımlar doğru poza bağlanır. Çizgisiz sayfalarda
+    satır satır metin okumaya geri dönülür.
     """
     import pdfplumber
 
     sonuc: list[Satir] = []
     with pdfplumber.open(yol) as pdf:
         for sayfa in pdf.pages:
-            for satir in (sayfa.extract_text() or "").splitlines():
-                satir = satir.strip()
-                m = PDF_SATIR_RE.match(satir)
-                if m and poz_mu(m["poz"]):
-                    tanim, birim = m["tanim"], m["birim"]
-                    if not birim_mi(birim):  # birim sütunu boşsa son kelime tanıma aittir
-                        tanim, birim = f"{tanim} {birim}", None
-                    sonuc.append(Satir(m["poz"], tanim, birim, sayi(m["fiyat"])))
-                elif sonuc and satir and not poz_mu(satir.split()[0]) and not _sayfa_ustu(satir):
-                    sonuc[-1].tanim += " " + satir
+            satirlar = _pdf_tablo_sayfasi(sayfa)
+            sonuc.extend(satirlar if satirlar is not None else _pdf_metin_sayfasi(sayfa, sonuc))
+    return sonuc
+
+
+def _kumele(degerler, tolerans):
+    """Birbirine yakın koordinatları tek değerde birleştirir."""
+    gruplar: list[list[float]] = []
+    for d in sorted(degerler):
+        if gruplar and d - gruplar[-1][-1] <= tolerans:
+            gruplar[-1].append(d)
+        else:
+            gruplar.append([d])
+    return [sum(g) / len(g) for g in gruplar]
+
+
+def _pdf_tablo_sayfasi(sayfa) -> list[Satir] | None:
+    from collections import Counter
+
+    dikey = [r for r in sayfa.rects if r["width"] < 2 and r["height"] > 2]
+    yatay = [r for r in sayfa.rects if r["height"] < 2 and r["width"] > 2]
+    if len(dikey) < 5 or len(yatay) < 5:
+        return None
+    # Sütun sınırları: en sık görülen 5 dikey çizgi (sol kenar, poz|tanım, tanım|birim, birim|fiyat, sağ kenar)
+    xs = _kumele([x for x, _ in Counter(round(r["x0"]) for r in dikey).most_common(8)], 3)
+    if len(xs) < 5:
+        return None
+    xs = sorted(xs)[:5] if len(xs) == 5 else _en_iyi_5(xs, dikey)
+    sinir = xs  # [sol, poz/tanım, tanım/birim, birim/fiyat, sağ]
+
+    ys = _kumele([r["top"] for r in yatay], 3)
+    kelimeler = sayfa.extract_words(keep_blank_chars=False, use_text_flow=False)
+    sonuc = []
+    for ust, alt in zip(ys, ys[1:]):
+        bant = [w for w in kelimeler if ust <= (w["top"] + w["bottom"]) / 2 < alt]
+        if not bant:
+            continue
+        sutun = {0: [], 1: [], 2: [], 3: []}
+        for w in bant:
+            orta = (w["x0"] + w["x1"]) / 2
+            for i in range(4):
+                if sinir[i] - 2 <= orta < sinir[i + 1] + 2:
+                    sutun[i].append(w)
+                    break
+        poz = " ".join(w["text"] for w in sutun[0]).strip()
+        if not poz_mu(poz):
+            continue  # başlık / bölüm adı satırı
+        sonuc.append(Satir(poz, _satir_metni(sutun[1]), _satir_metni(sutun[2]) or None,
+                           sayi(_satir_metni(sutun[3]))))
+    return sonuc
+
+
+def _en_iyi_5(xs, dikey):
+    from collections import Counter
+    sayac = Counter()
+    for r in dikey:
+        for x in xs:
+            if abs(r["x0"] - x) <= 3:
+                sayac[x] += 1
+    return sorted(x for x, _ in sayac.most_common(5))
+
+
+def _satir_metni(kelimeler) -> str:
+    """Kelimeleri okuma sırasına (yukarıdan aşağı, soldan sağa) dizip birleştirir."""
+    kelimeler = sorted(kelimeler, key=lambda w: (round(w["top"]), w["x0"]))
+    return re.sub(r"\s+", " ", " ".join(w["text"] for w in kelimeler)).strip()
+
+
+def _pdf_metin_sayfasi(sayfa, onceki: list[Satir]) -> list[Satir]:
+    sonuc: list[Satir] = []
+    for satir in (sayfa.extract_text() or "").splitlines():
+        satir = satir.strip()
+        m = PDF_SATIR_RE.match(satir)
+        if m and poz_mu(m["poz"]):
+            tanim, birim = m["tanim"], m["birim"]
+            if not birim_mi(birim):  # birim sütunu boşsa son kelime tanıma aittir
+                tanim, birim = f"{tanim} {birim}", None
+            sonuc.append(Satir(m["poz"], tanim, birim, sayi(m["fiyat"])))
+        elif (sonuc or onceki) and satir and not poz_mu(satir.split()[0]) and not _sayfa_ustu(satir):
+            (sonuc or onceki)[-1].tanim += " " + satir
     return sonuc
 
 

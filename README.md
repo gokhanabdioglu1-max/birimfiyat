@@ -20,6 +20,16 @@ docker build -t birimfiyat .
 docker run -d -p 8000:8000 -v birimfiyat-veri:/data birimfiyat
 ```
 
+## Hazır veriler
+`veri/csv/` klasöründeki listeler uygulama ilk açıldığında kendiliğinden yüklenir:
+
+| Dosya | Kaynak | Poz |
+|---|---|---|
+| `CSB_2026_Kasim.csv` | ÇŞİDB 2026 Kasım ayı güncel inşaat birim fiyat listesi (TÜİK endeksleriyle) | 1.878 |
+
+Dosya adı biçimi `KURUM_YIL_DONEM.csv`. Yeni bir liste eklemek için PDF/Excel'i içe aktarıp
+(aşağıya bakın) CSV olarak bu klasöre koymak yeterli. Elle yüklemek için: `python -m app.kur`
+
 ## Veri yükleme
 Bakanlığın (ÇŞİDB Yüksek Fen Kurulu) yayımladığı birim fiyat dosyasını indirip:
 ```bash

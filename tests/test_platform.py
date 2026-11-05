@@ -63,6 +63,7 @@ def test_yukle_ve_ara(con, tmp_path, monkeypatch):
     assert con.execute("SELECT COUNT(*) FROM poz_fts").fetchone()[0] == 4
 
     monkeypatch.setenv("BF_DB", str(tmp_path / "t.db"))
+    monkeypatch.setenv("BF_OTOMATIK_YUKLE", "0")
     from app import db
     importlib.reload(db)
     from app import main
@@ -80,3 +81,14 @@ def test_yukle_ve_ara(con, tmp_path, monkeypatch):
     g = c.get("/api/poz/15.150.9001").json()
     assert [x["fiyat"] for x in g] == [1000.0, 1300.0]
     assert c.get("/").status_code == 200
+
+
+def test_hazir_csb_listesi(con):
+    """Repodaki CSB 2026 Kasım listesi: PDF'ten okunan 1878 pozun tamamı yüklenmeli."""
+    from app.kur import hepsini_yukle
+    hepsini_yukle(con)
+    k = con.execute("SELECT id FROM kaynak WHERE kurum='CSB' AND yil=2026 AND donem='Kasım'").fetchone()
+    assert k
+    assert con.execute("SELECT COUNT(*) FROM poz WHERE kaynak_id=?", (k["id"],)).fetchone()[0] == 1878
+    r = con.execute("SELECT birim, fiyat FROM poz WHERE kaynak_id=? AND poz_no='15.100.1001'", (k["id"],)).fetchone()
+    assert (r["birim"], r["fiyat"]) == ("Ton", 311.70)
