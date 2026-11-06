@@ -67,6 +67,12 @@ def test_siniflandir():
     assert takip.siniflandir("2026 Yapı Yaklaşık Birim Maliyetleri", "") is None
     assert takip.siniflandir("2026 İnşaat Birim Fiyatları (İngilizce)", "") is None
     assert takip.siniflandir("2019 İnşaat Birim Fiyatları", "") is None  # çok eski
+    # Bakanlık sunucusundaki gerçek dosya adları: Türkçe harfler tireye dönüşmüş
+    assert takip.siniflandir("", "https://x/2026-kas-m-elk-bf-1226.pdf") == \
+        {"kurum": "CSB", "yil": 2026, "donem": "Kasım", "liste": "elektrik", "icerik": "fiyat"}
+    assert takip.siniflandir("", "https://x/2026-Kas-m-n-aat-Birim-Fiyat-20261103121129.pdf")["liste"] == "insaat"
+    a = takip.siniflandir("", "https://x/in-aat-analiz-1-20260115162935-20260120125449.pdf")
+    assert (a["yil"], a["liste"], a["icerik"], a["parca"]) == (2026, "insaat", "analiz", 1)
 
 
 def test_takip_turu(ortam):

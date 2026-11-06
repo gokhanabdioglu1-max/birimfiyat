@@ -65,7 +65,7 @@ def ara(q: str = Query("", max_length=200), kaynak_id: int | None = None, liste:
     where = " AND ".join(kosul)
     temel = f"FROM poz p {katilim} JOIN kaynak k ON k.id = p.kaynak_id WHERE {where}"
     toplam = con.execute(f"SELECT COUNT(*) {temel}", param).fetchone()[0]
-    rows = con.execute(f"""SELECT p.id, p.poz_no, p.tanim, p.birim, p.fiyat, p.tur,
+    rows = con.execute(f"""SELECT p.id, p.poz_no, p.tanim, p.birim, p.fiyat, p.montaj, p.tur,
                                   k.kurum, k.yil, k.donem, k.liste,
                                   EXISTS (SELECT 1 FROM analiz a WHERE a.poz_no = p.poz_no) AS analiz_var
                            {temel} ORDER BY {sira} LIMIT ? OFFSET ?""",
@@ -76,7 +76,7 @@ def ara(q: str = Query("", max_length=200), kaynak_id: int | None = None, liste:
 @app.get("/api/poz/{poz_no:path}")
 def poz_detay(poz_no: str):
     """Pozun tüm yıl/dönemlerdeki fiyatları ve en güncel analizi."""
-    gecmis = con.execute("""SELECT p.poz_no, p.tanim, p.birim, p.fiyat, k.kurum, k.yil, k.donem, k.liste
+    gecmis = con.execute("""SELECT p.poz_no, p.tanim, p.birim, p.fiyat, p.montaj, k.kurum, k.yil, k.donem, k.liste
                             FROM poz p JOIN kaynak k ON k.id = p.kaynak_id
                             WHERE p.poz_no = ? ORDER BY k.sira, k.yuklenme""", (poz_no,)).fetchall()
     a = con.execute("""SELECT a.*, k.yil, k.donem FROM analiz a JOIN kaynak k ON k.id = a.kaynak_id

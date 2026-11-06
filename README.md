@@ -54,6 +54,10 @@ Dosya adı biçimi: `KURUM_YIL_DONEM_LISTE.csv`, analizler için `..._analiz.csv
 | Dosya | Kaynak | Poz |
 |---|---|---|
 | `CSB_2026_Kasim_insaat.csv` | ÇŞİDB 2026 Kasım ayı güncel inşaat birim fiyatları (TÜİK endeksleriyle) | 1.878 |
+| `CSB_2026_Kasim_elektrik.csv` | ÇŞİDB 2026 Kasım ayı güncel elektrik tesisat birim fiyatları ve montaj bedelleri | 5.911 |
+
+Tesisat listelerinde iki fiyat vardır: **Birim Fiyat** (montaj dahil) ve **Montaj Bedeli**
+(birim fiyatın içindeki montaj payı). Platform ikisini de saklar ve gösterir.
 
 ## Veri yükleme
 Bakanlığın (ÇŞİDB Yüksek Fen Kurulu) yayımladığı birim fiyat dosyasını indirip:

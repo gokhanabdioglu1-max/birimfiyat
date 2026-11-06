@@ -45,6 +45,16 @@ def test_excel_baslikli(tmp_path):
     assert [(x.poz_no, x.birim, x.fiyat) for x in s] == [("15.150.9001", "m³", 1234.5), ("15.275.9002", "m²", 456.75)]
 
 
+def test_excel_montajli(tmp_path):
+    df = pd.DataFrame([
+        ["Poz No", "Tanım", "Birim", "Güncel Birim Fiyat (TL)", "Güncel Montaj Bedeli (TL)"],
+        ["35.100.9101", "Test pano", "Ad", "35.586,93", "4.200,34"],
+    ])
+    yol = tmp_path / "m.xlsx"; df.to_excel(yol, header=False, index=False)
+    s = importer.oku(yol)
+    assert (s[0].fiyat, s[0].montaj, s[0].birim) == (35586.93, 4200.34, "Ad")
+
+
 def test_csv_basliksiz(tmp_path):
     yol = tmp_path / "b.csv"
     yol.write_text("10.130.9001;Test çimentosu torba;ton;3.250,00\n;devam satırı;;\n", encoding="utf-8")
@@ -92,3 +102,8 @@ def test_hazir_csb_listesi(con):
     assert con.execute("SELECT COUNT(*) FROM poz WHERE kaynak_id=?", (k["id"],)).fetchone()[0] == 1878
     r = con.execute("SELECT birim, fiyat FROM poz WHERE kaynak_id=? AND poz_no='15.100.1001'", (k["id"],)).fetchone()
     assert (r["birim"], r["fiyat"]) == ("Ton", 311.70)
+    # Elektrik 2026 Kasım: 5911 poz, birim fiyat ve montaj bedeli ayrı
+    e = con.execute("SELECT id FROM kaynak WHERE yil=2026 AND donem='Kasım' AND liste='elektrik'").fetchone()
+    assert con.execute("SELECT COUNT(*) FROM poz WHERE kaynak_id=?", (e["id"],)).fetchone()[0] == 5911
+    r = con.execute("SELECT fiyat, montaj FROM poz WHERE kaynak_id=? AND poz_no='35.100.1101'", (e["id"],)).fetchone()
+    assert (r["fiyat"], r["montaj"]) == (35586.93, 4200.34)

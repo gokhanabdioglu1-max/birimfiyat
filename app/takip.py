@@ -50,13 +50,28 @@ DOSYA_UZANTILARI = (".pdf", ".xlsx", ".xls", ".zip")
 HARIC_KELIMELER = ("ingilizce", "english", "rusca", "russian", "yaklasik maliyet", "yaklasik birim maliyet",
                    "duzeltme", "eklenen", "cikarilan", "degisiklik", "kilavuz", "tebligi", "yonetmelik",
                    "hizmet bedeli", "mimarlik", "muhendislik")
+
+
+def _kalip(kelime: str) -> str:
+    """Bakanlık dosya adlarında Türkçe harfler tireye dönüşebiliyor ("İnşaat" -> "in-aat").
+    Bu yüzden her Türkçe harf için "o harf ya da boşluk" kabul eden bir kalıp üretir."""
+    parca = []
+    for ch in kelime:
+        k = katla(ch)
+        # harf kendisi, boşluk ya da hiç ("İnşaat" -> "n-aat" de görüldü)
+        parca.append(f"(?:{re.escape(k)}| )?" if ch in "çğıöşüÇĞİÖŞÜ" else re.escape(k))
+    return "".join(parca)
+
+
 # Sıra önemli: "Elektrik Tesisatı" elektrik, "İnşaat ve Tesisat" inşaat listesidir
-LISTE_KELIMELERI = [
-    ("elektrik", ("elektrik",)),
-    ("tesisat", ("mekanik",)),
-    ("insaat", ("insaat",)),
-    ("tesisat", ("tesisat",)),
+LISTE_KALIPLARI = [
+    ("elektrik", re.compile(r"\b(?:elektrik|elk)")),
+    ("tesisat", re.compile(r"\b(?:mekanik|mek)\b|\bmekanik")),
+    ("insaat", re.compile(rf"\b(?:{_kalip('İnşaat')}|ins)\b|\b{_kalip('İnşaat')}")),
+    ("tesisat", re.compile(rf"\b{_kalip('tesisat')}")),
 ]
+AY_KALIPLARI = [(ay, re.compile(rf"\b{_kalip(ay)}\b")) for ay in AYLAR]
+
 EN_AZ_POZ = 100
 EN_FAZLA_FIYATSIZ_ORAN = 0.05
 ZAMAN_ASIMI = 90  # saniye
@@ -145,25 +160,36 @@ def _dosya_mi(url: str) -> bool:
 
 
 def siniflandir(metin: str, url: str = "", ayar: dict | None = None) -> dict | None:
-    """Bağlantının hangi liste olduğunu bulur; birim fiyat listesi değilse None."""
+    """Bağlantının hangi liste olduğunu bulur; birim fiyat listesi değilse None.
+
+    Örnek: "2026-kas-m-elk-bf" -> 2026 Kasım elektrik birim fiyat,
+           "in-aat-analiz-1"   -> inşaat analizleri, 1. kitap
+    """
     ayar = ayar or VARSAYILAN_AYAR
     dosya_adi = urllib.parse.unquote(urllib.parse.urlparse(url).path.rsplit("/", 1)[-1])
+    dosya_adi = re.sub(r"\.(pdf|xlsx?|zip)$", "", dosya_adi, flags=re.I)
     k = katla(f"{metin} {dosya_adi}").replace("_", " ").replace("-", " ")
     k = re.sub(r"\s+", " ", k)
     if any(h in k for h in HARIC_KELIMELER):
         return None
     analiz = "analiz" in k
-    if not (analiz or "birim fiyat" in k or "birimfiyat" in k or "bf" in k.split()):
+    if not (analiz or "birim fiyat" in k or "birimfiyat" in k or "fiyat listesi" in k or re.search(r"\bbf\b", k)):
         return None
-    liste = next((l for l, kelimeler in LISTE_KELIMELERI if any(w in k for w in kelimeler)), None)
+    liste = next((l for l, kalip in LISTE_KALIPLARI if kalip.search(k)), None)
     yillar = [int(y) for y in re.findall(r"(?<!\d)(20[2-9]\d)(?!\d)", k)]
+    if not yillar:  # yıl yalnızca yükleme zaman damgasında olabilir: "...-20260115162935"
+        yillar = [int(y) for y in re.findall(r"(?<!\d)(20[2-9]\d)[01]\d[0-3]\d\d{6}(?!\d)", k)][:1]
     if not liste or not yillar:
         return None
     yil = max(yillar)
     if yil < ayar["en_eski_yil"]:
         return None
-    donem = next((a for a in AYLAR if re.search(rf"\b{katla(a)}\b", k)), "")
-    return {"kurum": "CSB", "yil": yil, "donem": donem, "liste": liste, "icerik": "analiz" if analiz else "fiyat"}
+    donem = next((ay for ay, kalip in AY_KALIPLARI if kalip.search(k)), "")
+    sonuc = {"kurum": "CSB", "yil": yil, "donem": donem, "liste": liste, "icerik": "analiz" if analiz else "fiyat"}
+    if analiz:  # analiz kitapları parçalara bölünebiliyor: "analiz-1", "Analizler 2. Kitap"
+        m = re.search(r"analiz\w*\s+(\d{1,2})\b(?!\d)", k) or re.search(r"\b(\d{1,2})\s*\.?\s*(?:kitap|cilt|kisim)", k)
+        sonuc["parca"] = int(m.group(1)) if m else 0
+    return sonuc
 
 
 def tara(ayar: dict, istek=_istek, gunluk=print) -> tuple[list[tuple[Baglanti, dict]], int]:
@@ -217,7 +243,7 @@ def dosyayi_isle(con, yol: Path, s: dict, csv_klasoru: Path) -> str:
         analizler = importer.analiz_oku(yol)  # okuyucu yoksa NotImplementedError
         if len(analizler) < EN_AZ_POZ:
             raise ValueError(f"Sadece {len(analizler)} analiz okunabildi, dosya biçimi farklı olabilir")
-        hedef = csv_klasoru / kur.dosya_adi(s["kurum"], s["yil"], s["donem"], s["liste"], "analiz")
+        hedef = csv_klasoru / kur.dosya_adi(s["kurum"], s["yil"], s["donem"], s["liste"], "analiz", s.get("parca", 0))
         kur.analiz_csv_yaz(hedef, analizler)
     else:
         satirlar = importer.oku(yol)

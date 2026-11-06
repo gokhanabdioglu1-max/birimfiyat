@@ -8,7 +8,7 @@ import sqlite3
 from pathlib import Path
 
 DB_YOLU = Path(os.environ.get("BF_DB", Path(__file__).resolve().parent.parent / "veri" / "birimfiyat.db"))
-SEMA_SURUMU = 2
+SEMA_SURUMU = 3
 
 SEMA = """
 CREATE TABLE IF NOT EXISTS kaynak (
@@ -18,10 +18,11 @@ CREATE TABLE IF NOT EXISTS kaynak (
     donem     TEXT NOT NULL DEFAULT '',     -- '' = yıl başı; 'Kasım' gibi güncel fiyat dönemi
     liste     TEXT NOT NULL DEFAULT 'insaat',  -- insaat | tesisat | elektrik
     icerik    TEXT NOT NULL DEFAULT 'fiyat',   -- fiyat | analiz
+    parca     INTEGER NOT NULL DEFAULT 0,      -- parçalı analiz kitaplarında kitap no
     sira      INTEGER NOT NULL DEFAULT 0,      -- yil*100 + ay (yıl başı = 0): en güncel olanı bulmak için
     dosya     TEXT,
     yuklenme  TEXT DEFAULT (datetime('now')),
-    UNIQUE (kurum, yil, donem, liste, icerik)
+    UNIQUE (kurum, yil, donem, liste, icerik, parca)
 );
 
 CREATE TABLE IF NOT EXISTS poz (
@@ -30,7 +31,8 @@ CREATE TABLE IF NOT EXISTS poz (
     poz_no     TEXT NOT NULL,
     tanim      TEXT NOT NULL,
     birim      TEXT,
-    fiyat      REAL,
+    fiyat      REAL,                  -- birim fiyat (tesisat listelerinde montaj dahil)
+    montaj     REAL,                  -- tesisat listelerindeki ayrı montaj bedeli
     tur        TEXT,                  -- 'birim_fiyat' | 'rayic' | NULL
     UNIQUE (kaynak_id, poz_no)
 );

@@ -3,6 +3,7 @@
 Dosya adı biçimi:
     KURUM_YIL_DONEM_LISTE.csv          birim fiyat listesi   (ör. CSB_2026_Kasim_insaat.csv)
     KURUM_YIL_DONEM_LISTE_analiz.csv   analiz kitabı         (ör. CSB_2026_Yilbasi_tesisat_analiz.csv)
+    KURUM_YIL_DONEM_LISTE_analizN.csv  parçalı analiz kitabının N. kitabı
 DONEM: Yilbasi, Ocak ... Aralik.  LISTE: insaat, tesisat, elektrik.
 Kullanım: python -m app.kur
 """
@@ -16,9 +17,10 @@ CSV_KLASORU = Path(__file__).resolve().parent.parent / "veri" / "csv"
 _DONEM_ADI = {katla(a): a for a in AYLAR}
 
 
-def dosya_adi(kurum: str, yil: int, donem: str, liste: str, icerik: str = "fiyat") -> str:
+def dosya_adi(kurum: str, yil: int, donem: str, liste: str, icerik: str = "fiyat", parca: int = 0) -> str:
     donem_kisa = katla(donem).capitalize() if donem else "Yilbasi"
-    return f"{kurum.upper()}_{yil}_{donem_kisa}_{liste}" + ("_analiz" if icerik == "analiz" else "") + ".csv"
+    ek = f"_analiz{parca or ''}" if icerik == "analiz" else ""
+    return f"{kurum.upper()}_{yil}_{donem_kisa}_{liste}{ek}.csv"
 
 
 def dosya_adini_coz(ad: str) -> dict | None:
@@ -26,8 +28,11 @@ def dosya_adini_coz(ad: str) -> dict | None:
     if len(parca) < 4 or not parca[1].isdigit():
         return None
     donem = "" if parca[2].lower() == "yilbasi" else _DONEM_ADI.get(parca[2].lower(), parca[2])
+    ek = parca[4] if len(parca) > 4 else ""
+    analiz = ek.startswith("analiz")
     return {"kurum": parca[0].upper(), "yil": int(parca[1]), "donem": donem, "liste": parca[3],
-            "icerik": "analiz" if len(parca) > 4 and parca[4] == "analiz" else "fiyat"}
+            "icerik": "analiz" if analiz else "fiyat",
+            "parca": int(ek[6:]) if analiz and ek[6:].isdigit() else 0}
 
 
 # ---- CSV yazma / okuma
@@ -39,9 +44,10 @@ def _tr(x):
 def fiyat_csv_yaz(yol: Path, satirlar) -> None:
     with open(yol, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow(["Poz No", "Tanımı", "Birimi", "Birim Fiyatı"])
+        montajli = any(s.montaj is not None for s in satirlar)
+        w.writerow(["Poz No", "Tanımı", "Birimi", "Birim Fiyatı"] + (["Montaj Bedeli"] if montajli else []))
         for s in satirlar:
-            w.writerow([s.poz_no, s.tanim, s.birim or "", _tr(s.fiyat)])
+            w.writerow([s.poz_no, s.tanim, s.birim or "", _tr(s.fiyat)] + ([_tr(s.montaj)] if montajli else []))
 
 
 ANALIZ_BASLIK = ["Analiz Poz No", "Analiz Tanımı", "Analiz Birimi", "Ara Toplam", "Kâr Oranı", "Fiyat",
@@ -81,7 +87,8 @@ def dosya_yukle(con, yol: Path) -> int:
     if b is None:
         raise ValueError(f"Dosya adı biçimi tanınmadı: {yol.name}")
     if b["icerik"] == "analiz":
-        return importer.analiz_yukle(con, analiz_csv_oku(yol), b["kurum"], b["yil"], b["donem"], yol.name, b["liste"])
+        return importer.analiz_yukle(con, analiz_csv_oku(yol), b["kurum"], b["yil"], b["donem"], yol.name,
+                                     b["liste"], b["parca"])
     return importer.yukle(con, importer.oku(yol), b["kurum"], b["yil"], b["donem"], yol.name, b["liste"])
 
 
@@ -93,8 +100,8 @@ def hepsini_yukle(con=None, sadece_eksikler=False, klasor: Path | None = None) -
         if b is None:
             continue
         if sadece_eksikler and con.execute(
-                "SELECT 1 FROM kaynak WHERE kurum=? AND yil=? AND donem=? AND liste=? AND icerik=?",
-                (b["kurum"], b["yil"], b["donem"], b["liste"], b["icerik"])).fetchone():
+                "SELECT 1 FROM kaynak WHERE kurum=? AND yil=? AND donem=? AND liste=? AND icerik=? AND parca=?",
+                (b["kurum"], b["yil"], b["donem"], b["liste"], b["icerik"], b["parca"])).fetchone():
             continue
         n = dosya_yukle(con, yol)
         print(f"{yol.name}: {n} kayıt")

@@ -52,6 +52,7 @@ class Satir:
     tanim: str
     birim: str | None
     fiyat: float | None
+    montaj: float | None = None   # tesisat listelerinde ayrıca verilen montaj bedeli
 
 
 def sayi(deger) -> float | None:
@@ -95,9 +96,17 @@ def _baslik_eslestir(hucreler: list) -> dict | None:
     eslesme = {}
     for i, h in enumerate(hucreler):
         h = katla(str(h or "")).strip()
-        for alan, adlar in BASLIKLAR.items():
-            if alan not in eslesme and any(h == katla(a) or h.startswith(katla(a) + " ") for a in adlar):
-                eslesme[alan] = i
+        if not h:
+            continue
+        if "montaj" in h:  # "Montaj Bedeli" (tesisat listeleri)
+            eslesme.setdefault("montaj", i)
+        elif "fiyat" in h or h in ("tutar", "rayic"):
+            eslesme.setdefault("fiyat", i)
+        else:
+            for alan in ("poz_no", "tanim", "birim"):
+                if alan not in eslesme and any(h == katla(a) or h.startswith(katla(a) + " ") for a in BASLIKLAR[alan]):
+                    eslesme[alan] = i
+                    break
     return eslesme if {"poz_no", "tanim", "fiyat"} <= eslesme.keys() else None
 
 
@@ -141,8 +150,9 @@ def excel_oku(yol: Path) -> list[Satir]:
                     continue
                 tanim = hucreler[eslesme["tanim"]]
                 birim = hucreler[eslesme["birim"]] if "birim" in eslesme else None
+                montaj = sayi(hucreler[eslesme["montaj"]]) if "montaj" in eslesme else None
                 sonuc.append(Satir(str(poz).strip(), str(tanim or "").strip(),
-                                   str(birim).strip() if birim else None, sayi(hucreler[eslesme["fiyat"]])))
+                                   str(birim).strip() if birim else None, sayi(hucreler[eslesme["fiyat"]]), montaj))
             elif s := _satir_tahmin(hucreler):
                 sonuc.append(s)
     return sonuc
@@ -166,9 +176,10 @@ def pdf_oku(yol: Path) -> list[Satir]:
     import pdfplumber
 
     sonuc: list[Satir] = []
+    basliklar: dict = {}  # sütun başlıkları; başlıksız sayfalar öncekini kullanır
     with pdfplumber.open(yol) as pdf:
         for sayfa in pdf.pages:
-            satirlar = _pdf_tablo_sayfasi(sayfa)
+            satirlar = _pdf_tablo_sayfasi(sayfa, basliklar)
             sonuc.extend(satirlar if satirlar is not None else _pdf_metin_sayfasi(sayfa, sonuc))
     return sonuc
 
@@ -184,7 +195,7 @@ def _kumele(degerler, tolerans):
     return [sum(g) / len(g) for g in gruplar]
 
 
-def _pdf_tablo_sayfasi(sayfa) -> list[Satir] | None:
+def _pdf_tablo_sayfasi(sayfa, basliklar: dict | None = None) -> list[Satir] | None:
     """Tablo çizgileri olan bir sayfayı okur; çizgi yoksa None döner.
 
     Sütun sayısı ve sırası sabit varsayılmaz: her sütunun rolü (poz no, tanım,
@@ -218,19 +229,31 @@ def _pdf_tablo_sayfasi(sayfa) -> list[Satir] | None:
         if any(hucre):
             bantlar.append([_satir_metni(h) for h in hucre])
 
-    roller = _sutun_rolleri(bantlar)
+    # İlk poz satırından önceki bantlar sütun başlıklarıdır ("Birim Fiyat", "Montaj Bedeli" ...)
+    basliklar = {} if basliklar is None else basliklar
+    ilk_poz = next((i for i, h in enumerate(bantlar) if any(poz_mu(x) for x in h)), len(bantlar))
+    if ilk_poz:
+        ust = [" ".join(h[i] for h in bantlar[:ilk_poz]) for i in range(len(sinir) - 1)]
+        if any("fiyat" in katla(x) or "montaj" in katla(x) for x in ust):
+            basliklar.clear()
+            basliklar.update({len(ust): ust})
+    roller = _sutun_rolleri(bantlar, basliklar.get(len(sinir) - 1))
     if roller is None:
         return None
-    p, t, b, f = roller
+    p, t, b, f, m = roller
     sonuc = []
     for h in bantlar:
         if poz_mu(h[p]):
-            sonuc.append(Satir(h[p], h[t], (h[b] if b is not None else "") or None, sayi(h[f])))
+            sonuc.append(Satir(h[p], h[t], (h[b] if b is not None else "") or None, sayi(h[f]),
+                               sayi(h[m]) if m is not None else None))
     return sonuc
 
 
-def _sutun_rolleri(bantlar: list[list[str]]):
-    """Hangi sütunun poz no, tanım, birim ve fiyat olduğunu içerikten bulur."""
+def _sutun_rolleri(bantlar: list[list[str]], baslik: list[str] | None = None):
+    """Hangi sütunun poz no, tanım, birim, fiyat ve montaj bedeli olduğunu bulur.
+
+    İçeriğe bakar; birden çok sayı sütunu varsa başlıktan "montaj" yazanı ayırır.
+    """
     if not bantlar:
         return None
     n = len(bantlar[0])
@@ -247,12 +270,21 @@ def _sutun_rolleri(bantlar: list[list[str]]):
     sayisal = [i for i in range(n) if i not in (p, b) and sum(sayi(h[i]) is not None for h in satirlar) >= len(satirlar) * 0.3]
     if not sayisal:
         return None
-    f = max(sayisal)  # en sağdaki sayısal sütun: birim fiyat
-    kalan = [i for i in range(n) if i not in (p, b, f) and i not in sayisal]
+    m = None
+    if baslik and len(sayisal) > 1:
+        m = next((i for i in sayisal if "montaj" in katla(baslik[i])), None)
+    fiyatlar = [i for i in sayisal if i != m]
+    if not fiyatlar:
+        return None
+    if baslik and any("fiyat" in katla(baslik[i]) for i in fiyatlar):
+        f = max(i for i in fiyatlar if "fiyat" in katla(baslik[i]))
+    else:
+        f = max(fiyatlar)  # başlık yoksa en sağdaki sayısal sütun
+    kalan = [i for i in range(n) if i not in (p, b) and i not in sayisal]
     if not kalan:
         return None
     t = max(kalan, key=lambda i: sum(len(h[i]) for h in satirlar))
-    return p, t, b, f
+    return p, t, b, f, m
 
 
 def _satir_metni(kelimeler) -> str:
@@ -305,15 +337,15 @@ def oku(yol: Path) -> list[Satir]:
     raise ValueError(f"Desteklenmeyen dosya türü: {uzanti}")
 
 
-def _kaynak_ac(con, kurum, yil, donem, liste, icerik, dosya) -> int:
+def _kaynak_ac(con, kurum, yil, donem, liste, icerik, dosya, parca=0) -> int:
     """Aynı kaynak daha önce yüklendiyse siler, yenisini açar."""
-    eski = con.execute("SELECT id FROM kaynak WHERE kurum=? AND yil=? AND donem=? AND liste=? AND icerik=?",
-                       (kurum, yil, donem, liste, icerik)).fetchone()
+    eski = con.execute("SELECT id FROM kaynak WHERE kurum=? AND yil=? AND donem=? AND liste=? AND icerik=? AND parca=?",
+                       (kurum, yil, donem, liste, icerik, parca)).fetchone()
     if eski:
         con.execute("DELETE FROM poz_fts WHERE rowid IN (SELECT id FROM poz WHERE kaynak_id=?)", (eski["id"],))
         con.execute("DELETE FROM kaynak WHERE id=?", (eski["id"],))
-    return con.execute("INSERT INTO kaynak (kurum, yil, donem, liste, icerik, sira, dosya) VALUES (?,?,?,?,?,?,?)",
-                       (kurum, yil, donem, liste, icerik, donem_sira(yil, donem), dosya)).lastrowid
+    return con.execute("INSERT INTO kaynak (kurum, yil, donem, liste, icerik, parca, sira, dosya) VALUES (?,?,?,?,?,?,?,?)",
+                       (kurum, yil, donem, liste, icerik, parca, donem_sira(yil, donem), dosya)).lastrowid
 
 
 def yukle(con, satirlar: list[Satir], kurum: str, yil: int, donem: str = "", dosya: str = "",
@@ -326,8 +358,8 @@ def yukle(con, satirlar: list[Satir], kurum: str, yil: int, donem: str = "", dos
         for s in satirlar:
             tanim = re.sub(r"\s+", " ", s.tanim).strip()
             cur = con.execute(
-                "INSERT OR IGNORE INTO poz (kaynak_id, poz_no, tanim, birim, fiyat, tur) VALUES (?,?,?,?,?,?)",
-                (kid, s.poz_no, tanim, s.birim, s.fiyat, tur_bul(kurum, s.poz_no)))
+                "INSERT OR IGNORE INTO poz (kaynak_id, poz_no, tanim, birim, fiyat, montaj, tur) VALUES (?,?,?,?,?,?,?)",
+                (kid, s.poz_no, tanim, s.birim, s.fiyat, s.montaj, tur_bul(kurum, s.poz_no)))
             if cur.rowcount:
                 con.execute("INSERT INTO poz_fts (rowid, poz_no, tanim) VALUES (?,?,?)",
                             (cur.lastrowid, katla(s.poz_no), katla(tanim)))
@@ -336,11 +368,11 @@ def yukle(con, satirlar: list[Satir], kurum: str, yil: int, donem: str = "", dos
 
 
 def analiz_yukle(con, analizler: list["Analiz"], kurum: str, yil: int, donem: str = "", dosya: str = "",
-                 liste: str = "insaat") -> int:
+                 liste: str = "insaat", parca: int = 0) -> int:
     """Bir analiz kitabını baştan yazar; eklenen analiz sayısını döner."""
     kurum = kurum.upper()
     with con:
-        kid = _kaynak_ac(con, kurum, yil, donem, liste, "analiz", dosya)
+        kid = _kaynak_ac(con, kurum, yil, donem, liste, "analiz", dosya, parca)
         eklenen = 0
         for a in analizler:
             cur = con.execute("""INSERT OR IGNORE INTO analiz (kaynak_id, poz_no, tanim, birim, ara_toplam, kar_orani, fiyat)

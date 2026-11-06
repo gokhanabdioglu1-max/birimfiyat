@@ -156,7 +156,7 @@ async function ara() {
         <div class="bilgi" style="margin:2px 0 0;font-family:system-ui,sans-serif">${LISTE[s.liste] || ''} ${s.yil} ${esc(s.donem)}</div></td>
       <td class="tanim">${esc(s.tanim)}</td>
       <td>${esc(s.birim)}</td>
-      <td class="sayi">${s.fiyat != null ? TL.format(s.fiyat) : '—'}</td>
+      <td class="sayi">${s.fiyat != null ? TL.format(s.fiyat) : '—'}${s.montaj != null ? `<div class="bilgi" style="margin:2px 0 0" title="Birim fiyata dahil montaj bedeli">montaj ${TL.format(s.montaj)}</div>` : ''}</td>
       <td><button class="kucuk" onclick="event.stopPropagation(); kesifeEkle(${i})">+ Keşif</button></td>
     </tr>`).join('') : '<tr><td colspan="5" class="bos">Sonuç bulunamadı</td></tr>';
   const sayfaSay = Math.ceil(r.toplam / SAYFA);
@@ -172,11 +172,12 @@ async function detayGoster(pozNo) {
   const son = r[r.length - 1] || analiz;
   let h = `<h3 style="margin-top:0">${esc(son.poz_no)} <span class="rozet">${esc(son.birim)}</span></h3><p>${esc(son.tanim)}</p>`;
   if (r.length) h += `
-    <table><thead><tr><th>Liste / dönem</th><th class="sayi">Birim Fiyat (TL)</th><th class="sayi">Değişim</th></tr></thead><tbody>
+    <table><thead><tr><th>Liste / dönem</th><th class="sayi">Birim Fiyat (TL)</th>${r.some(x => x.montaj != null) ? '<th class="sayi">Montaj Bedeli (TL)</th>' : ''}<th class="sayi">Değişim</th></tr></thead><tbody>
     ${r.map((x, i) => {
       const onceki = i ? r[i - 1].fiyat : null;
       const deg = onceki && x.fiyat ? ((x.fiyat / onceki - 1) * 100).toFixed(1).replace('.', ',') + ' %' : '';
-      return `<tr><td>${LISTE[x.liste] || ''} ${x.yil} ${x.donem ? esc(x.donem) : 'yıl başı'}</td><td class="sayi">${x.fiyat != null ? TL.format(x.fiyat) : '—'}</td><td class="sayi">${deg}</td></tr>`;
+      const montaj = r.some(y => y.montaj != null) ? `<td class="sayi">${x.montaj != null ? TL.format(x.montaj) : '—'}</td>` : '';
+      return `<tr><td>${LISTE[x.liste] || ''} ${x.yil} ${x.donem ? esc(x.donem) : 'yıl başı'}</td><td class="sayi">${x.fiyat != null ? TL.format(x.fiyat) : '—'}</td>${montaj}<td class="sayi">${deg}</td></tr>`;
     }).join('')}</tbody></table>`;
   if (analiz) {
     let grup = null;
