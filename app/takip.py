@@ -60,21 +60,26 @@ def _kalip(kelime: str) -> str:
         k = katla(ch)
         # harf kendisi, boşluk ya da hiç ("İnşaat" -> "n-aat" de görüldü)
         parca.append(f"(?:{re.escape(k)}| )?" if ch in "çğıöşüÇĞİÖŞÜ" else re.escape(k))
-    return "".join(parca)
+    kucuk = "".join(parca)
+    # Büyük harfle yazılmış hali de ("HAZİRAN" -> "HAZ-RAN"): i -> İ, ı -> I dönüşür
+    buyuk = kelime.replace("i", "İ").replace("ı", "I").upper()
+    return kucuk if buyuk == kelime else f"(?:{kucuk}|{_kalip(buyuk)})"
 
 
 # Sıra önemli: "Elektrik Tesisatı" elektrik, "İnşaat ve Tesisat" inşaat listesidir
 LISTE_KALIPLARI = [
     ("elektrik", re.compile(r"\b(?:elektrik|elk)")),
-    ("tesisat", re.compile(r"\b(?:mekanik|mek)\b|\bmekanik")),
+    ("tesisat", re.compile(r"\b(?:mek|mak)\b|\bm[ae]kan(?:i| )?k|\bmakine")),
     ("insaat", re.compile(rf"\b(?:{_kalip('İnşaat')}|ins)\b|\b{_kalip('İnşaat')}")),
-    ("tesisat", re.compile(rf"\b{_kalip('tesisat')}")),
+    ("tesisat", re.compile(rf"\b{_kalip('tesİsat')}")),
 ]
+FIYAT_KALIBI = re.compile(rf"{_kalip('bİrİm fİyat')}|{_kalip('fİyat lİstesİ')}")
 AY_KALIPLARI = [(ay, re.compile(rf"\b{_kalip(ay)}\b")) for ay in AYLAR]
 
 EN_AZ_POZ = 100
 EN_FAZLA_FIYATSIZ_ORAN = 0.05
-ZAMAN_ASIMI = 90  # saniye
+ZAMAN_ASIMI = 300  # saniye (yıl başı kitapları 15 MB'ı geçebiliyor)
+TARAYICI_KIMLIGI = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 
 
 # ---------------------------------------------------------------- Ayarlar ve durum
@@ -117,7 +122,8 @@ def _ssl_baglami() -> ssl.SSLContext:
 
 
 def _istek(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "BirimFiyatPlatformu/1.0 (kurum ici fiyat takibi)"})
+    # Bakanlık sunucusu tarayıcı dışı istemcileri geri çeviriyor; kullanıcı onayıyla tarayıcı kimliği kullanılır
+    req = urllib.request.Request(url, headers={"User-Agent": TARAYICI_KIMLIGI})
     with urllib.request.urlopen(req, timeout=ZAMAN_ASIMI, context=_ssl_baglami()) as r:
         return r.read()
 
@@ -172,8 +178,8 @@ def siniflandir(metin: str, url: str = "", ayar: dict | None = None) -> dict | N
     k = re.sub(r"\s+", " ", k)
     if any(h in k for h in HARIC_KELIMELER):
         return None
-    analiz = "analiz" in k
-    if not (analiz or "birim fiyat" in k or "birimfiyat" in k or "fiyat listesi" in k or re.search(r"\bb ?f\b", k)):  # "bf", "b-f"
+    analiz = bool(re.search(r"anal(?:i| )?z", k))  # "ANALİZ" -> "anal-z" de görüldü
+    if not (analiz or FIYAT_KALIBI.search(k) or "birimfiyat" in k or re.search(r"\bb ?f\b", k)):  # "bf", "b-f"
         return None
     liste = next((l for l, kalip in LISTE_KALIPLARI if kalip.search(k)), None)
     yillar = [int(y) for y in re.findall(r"(?<!\d)(20[2-9]\d)(?!\d)", k)]
@@ -187,7 +193,8 @@ def siniflandir(metin: str, url: str = "", ayar: dict | None = None) -> dict | N
     donem = next((ay for ay, kalip in AY_KALIPLARI if kalip.search(k)), "")
     sonuc = {"kurum": "CSB", "yil": yil, "donem": donem, "liste": liste, "icerik": "analiz" if analiz else "fiyat"}
     if analiz:  # analiz kitapları parçalara bölünebiliyor: "analiz-1", "Analizler 2. Kitap"
-        m = re.search(r"analiz\w*\s+(\d{1,2})\b(?!\d)", k) or re.search(r"\b(\d{1,2})\s*\.?\s*(?:kitap|cilt|kisim)", k)
+        m = (re.search(r"anal(?:i| )?z\w*\s+(\d{1,2})\b(?!\d)", k) or re.search(r"\bcilt\s*(\d{1,2})\b", k)
+             or re.search(r"\b(\d{1,2})\s*\.?\s*(?:kitap|cilt|kisim)", k))
         sonuc["parca"] = int(m.group(1)) if m else 0
     return sonuc
 
@@ -252,8 +259,13 @@ def dosyayi_isle(con, yol: Path, s: dict, csv_klasoru: Path) -> str:
             raise ValueError(f"Sadece {len(satirlar)} poz okunabildi, dosya biçimi farklı olabilir")
         if fiyatsiz > len(satirlar) * EN_FAZLA_FIYATSIZ_ORAN:
             raise ValueError(f"{len(satirlar)} pozun {fiyatsiz} tanesinin fiyatı okunamadı")
-        hedef = csv_klasoru / kur.dosya_adi(s["kurum"], s["yil"], s["donem"], s["liste"])
-        kur.fiyat_csv_yaz(hedef, satirlar)
+        mesajlar = []
+        # Yıl başı kitabı inşaat, mekanik ve elektrik pozlarını birlikte içerir: poz numarasına göre ayrılır
+        for liste, parca in importer.listelere_bol(satirlar, s["liste"]).items():
+            hedef = csv_klasoru / kur.dosya_adi(s["kurum"], s["yil"], s["donem"], liste)
+            kur.fiyat_csv_yaz(hedef, parca)
+            mesajlar.append(f"{hedef.name}: {kur.dosya_yukle(con, hedef)} kayıt")
+        return "; ".join(mesajlar)
     n = kur.dosya_yukle(con, hedef)
     return f"{hedef.name}: {n} kayıt"
 

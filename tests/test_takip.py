@@ -91,7 +91,7 @@ def test_takip_turu(ortam):
     d = json.loads((tmp / "durum.json").read_text(encoding="utf-8"))["dosyalar"]
     assert d["https://webdosya.csb.gov.tr/x/eb.xlsx"]["durum"] == "yuklendi"
     assert d["https://webdosya.csb.gov.tr/x/bozuk.xlsx"]["durum"] == "reddedildi"
-    assert d["https://webdosya.csb.gov.tr/x/analiz.pdf"]["durum"] == "bekliyor"
+    assert d["https://webdosya.csb.gov.tr/x/analiz.pdf"]["durum"] == "hata"  # bozuk PDF: sonra tekrar denenir
 
     # ikinci tur: işlenmiş dosyalar tekrar indirilmez
     istekler.clear()
@@ -133,3 +133,28 @@ def test_analiz_csv_ve_api(tmp_path, monkeypatch):
     d = c.get("/api/poz/15.999.9001").json()
     assert d["analiz"]["fiyat"] == 1750.0 and len(d["analiz"]["kalemler"]) == 2
     assert c.get("/api/takip").status_code == 200
+
+
+GERCEK_DOSYA_ADLARI = [  # Bakanlık sunucusundaki gerçek adlar -> (yıl, dönem, liste, içerik)
+    ("2026-Eyl-l-n-aat-b-f-20260903141226.pdf", (2026, "Eylül", "insaat", "fiyat")),
+    ("2026-ubat-birim-fiyatlar-20260204120934.pdf", None),  # liste adı yok: bağlantı metnine bakılır
+    ("2026-Mart-n-aat-B-F-20260303131312.pdf", (2026, "Mart", "insaat", "fiyat")),
+    ("n-aat-Birim-Fiyatlar-2026-May-s-20260504130338.pdf", (2026, "Mayıs", "insaat", "fiyat")),
+    ("n-aat-Birim-Fiyatlar-2026-Haziran-20260605134827.pdf", (2026, "Haziran", "insaat", "fiyat")),
+    ("2026-a-ustos-in-aat-birim-fiyatlar-20260803151108.pdf", (2026, "Ağustos", "insaat", "fiyat")),
+    ("2026-UBAT-AYI-MEKAN-K-TES-SAT-F-YAT-L-STES-20260204121007.pdf", (2026, "Şubat", "tesisat", "fiyat")),
+    ("2026-HAZ-RAN-AYI-G-NCEL-MEKAN-K-TES-SAT-F-YAT-L-STES-20260605134843.pdf", (2026, "Haziran", "tesisat", "fiyat")),
+    ("2026-eyl-l-makanik-birim-fiyatlar-20260903141303.pdf", (2026, "Eylül", "tesisat", "fiyat")),
+    ("2026-ubat-elektrik-birim-fiyatlar-20260204121044.pdf", (2026, "Şubat", "elektrik", "fiyat")),
+    ("2026-kas-m-elk-bf-1226.pdf", (2026, "Kasım", "elektrik", "fiyat")),
+    ("4-insaat-birim-fiyatlari-eylul-2025-20250919101357.pdf", (2025, "Eylül", "insaat", "fiyat")),
+    ("Mekanik-Tesisat-Birim-Fiyat-Analizleri-3-20260121121534.pdf", (2026, "", "tesisat", "analiz")),
+    ("elektrik-analiz-cilt-2-2026-20260115163037.pdf", (2026, "", "elektrik", "analiz")),
+    ("in-aat-analiz-1-20260115162935-20260120125449.pdf", (2026, "", "insaat", "analiz")),
+]
+
+
+@pytest.mark.parametrize("ad,beklenen", GERCEK_DOSYA_ADLARI)
+def test_gercek_dosya_adlari(ad, beklenen):
+    s = takip.siniflandir("", "https://webdosya.csb.gov.tr/v2/yfk/2026/01/" + ad)
+    assert (s and (s["yil"], s["donem"], s["liste"], s["icerik"])) == (beklenen or None)

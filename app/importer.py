@@ -16,7 +16,7 @@ from pathlib import Path
 from .db import baglan, donem_sira, katla
 
 POZ_RE = re.compile(r"^(?:[A-ZÇĞİÖŞÜ]{1,5}[.\-/ ]?)?\d{1,4}(?:[./\-]\d{1,5}){1,4}(?:/[A-Z0-9]{1,4})?[A-Z]?$")
-SAYI_RE = re.compile(r"^\d{1,3}(?:\.\d{3})*(?:,\d+)?$|^\d+(?:,\d+)?$|^\d+\.\d+$")
+SAYI_RE = re.compile(r"^-?(?:\d{1,3}(?:\.\d{3})*(?:,\d+)?|\d+(?:,\d+)?|\d+\.\d+)$")
 BIRIMLER = {
     "m", "m2", "m²", "m3", "m³", "m1", "mt", "km", "cm", "mm", "kg", "gr", "ton", "t", "ad", "ad.", "adet",
     "sa", "sa.", "saat", "gün", "gun", "ay", "lt", "l", "litre", "takım", "tk", "set", "kwh", "kw", "kva",
@@ -66,7 +66,7 @@ def sayi(deger) -> float | None:
         return None
     if "," in s:
         s = s.replace(".", "").replace(",", ".")
-    elif s.count(".") > 1 or re.match(r"^\d{1,3}\.\d{3}$", s):
+    elif s.count(".") > 1 or re.match(r"^-?\d{1,3}\.\d{3}$", s):
         s = s.replace(".", "")
     try:
         return float(s)
@@ -313,11 +313,130 @@ def _sayfa_ustu(satir: str) -> bool:
     return k.startswith(("poz no", "sayfa", "birim fiyat")) or bool(re.fullmatch(r"[\d\s/\-]+", satir))
 
 
+LISTE_ONEKLERI = {"25": "tesisat", "35": "elektrik"}  # ÇŞİDB: 25.xxx mekanik, 35.xxx elektrik tesisat
+
+
+def listelere_bol(satirlar: list[Satir], varsayilan: str = "insaat") -> dict[str, list[Satir]]:
+    """Pozları poz numarasının ilk iki hanesine göre listelere ayırır (25 -> tesisat, 35 -> elektrik).
+
+    Diğer pozlar (15 inşaat, 10 rayiç, 19 yardımcı) varsayılan listeye gider. Aylık listelerde
+    zaten tek liste vardır; yıl başı kitabında üçü birlikte olduğu için bu ayrım gerekir.
+    """
+    sonuc: dict[str, list[Satir]] = {}
+    for x in satirlar:
+        liste = LISTE_ONEKLERI.get(x.poz_no[:2], varsayilan if varsayilan in ("insaat", "tesisat", "elektrik") else "insaat")
+        if varsayilan in ("tesisat", "elektrik") and x.poz_no[:2] not in LISTE_ONEKLERI:
+            liste = varsayilan  # tesisat listesindeki rayiç vb. pozlar kendi listesinde kalır
+        sonuc.setdefault(liste, []).append(x)
+    return sonuc
+
+
 # ---------------------------------------------------------------- Analiz kitapları
 
+_SAYI = r"-?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?"
+_KALEM_RE = re.compile(rf"^(?:(?P<poz>\S+)\s+)?(?P<tanim>.*?)\s+(?P<birim>\S+)\s+(?P<miktar>{_SAYI})\s+"
+                       rf"(?P<bf>{_SAYI})\s+(?P<tutar>{_SAYI})$")
+# Tanımı/birimi ayrı satırlara taşmış kalem: "10.110.1002 0,75 445,00 333,75"
+_KALEM_KISA_RE = re.compile(rf"^(?P<poz>\S+)\s+(?P<miktar>{_SAYI})\s+(?P<bf>{_SAYI})\s+(?P<tutar>{_SAYI})$")
+# Ara toplam üzerinden oranlı kalem: "Toplam* 0,03 34,87" (%3 şablon, çalışma sehpası vb.)
+_ORAN_KALEM_RE = re.compile(rf"^(?P<tanim>\D.*?)\s+(?P<oran>0,\d+)\s+(?P<tutar>{_SAYI})$")
+_ARA_RE = re.compile(rf"^Malzeme\s*\+\s*İşçilik Tutarı\s+(?P<x>{_SAYI})$", re.I)
+_KAR_RE = re.compile(rf"^(?P<oran>\d+(?:,\d+)?)\s*%\s*Yüklenici k[âa]rı.*?\s(?P<x>{_SAYI})$", re.I)
+_FIYAT_RE = re.compile(rf"^(?:\d+\s+)?\S+(?:\s\S+)?\s+Fiyatı\s+(?P<x>{_SAYI})$")
+_SAYFA_GURULTU = re.compile(r"^(Genel Fiyat Analizi|\d{1,2}\.\d{2}\.\d{4}|-\s*\d+\s*-|Poz No Tanımı.*)$")
+
+
 def analiz_oku(yol: Path) -> list[Analiz]:
-    """Analiz kitabını okur. Bakanlık analiz dosyasının biçimi görülünce yazılacak."""
-    raise NotImplementedError("Analiz okuyucu henüz hazır değil; dosya indirildi, platform güncellenince yüklenecek")
+    """Bakanlık analiz kitabını (PDF) okur.
+
+    Her analiz şu düzendedir:
+        Poz No Analizin Adı Ölçü Birimi
+        15.100.1001 <analizin adı> Ton           (ad, poz satırının üstüne/altına taşabilir)
+        Poz No Tanımı Ölçü Birimi Miktarı Birim Fiyatı Tutarı (TL)
+        <grup başlığı>                           (ör. "Foraj:", "Beton dökümü karşılığı")
+        10.100.1062 Düz işçi Sa 1 205,00 205,00
+        Malzeme + İşçilik Tutarı 205,00
+        25 % Yüklenici kârı ve genel giderler 51,25
+        1 Ton Fiyatı 256,25
+        <tarif metni ...>
+    """
+    import pdfplumber
+
+    analizler: list[Analiz] = []
+    durum = "bekle"          # bekle | baslik | kalem
+    baslik: list[str] = []
+    grup: list[str] = []
+    a: Analiz | None = None
+
+    def baslik_coz(satirlar: list[str]) -> Analiz | None:
+        i = next((i for i, x in enumerate(satirlar) if poz_mu(x.split()[0])), None)
+        if i is None:
+            return None
+        parcalar = satirlar[i].split()
+        poz, kalan = parcalar[0], parcalar[1:]
+        birim = None
+        if kalan and birim_mi(kalan[-1]):
+            birim = kalan.pop()
+            if kalan and kalan[-1].isdigit():  # "100 m²", "1000 Ad"
+                birim = f"{kalan.pop()} {birim}"
+        ad = " ".join(satirlar[:i] + [" ".join(kalan)] + satirlar[i + 1:])
+        return Analiz(poz, re.sub(r"\s+", " ", ad).strip(), birim, [])
+
+    with pdfplumber.open(yol) as pdf:
+        for sayfa in pdf.pages:
+            for satir in (sayfa.extract_text() or "").splitlines():
+                satir = satir.strip()
+                if not satir:
+                    continue
+                if satir.startswith("Poz No Analizin Adı"):
+                    durum, baslik, a = "baslik", [], None
+                    continue
+                if durum == "baslik":
+                    if satir.startswith("Poz No Tanımı"):
+                        a = baslik_coz(baslik)
+                        durum, grup = ("kalem", []) if a else ("bekle", [])
+                    elif not _SAYFA_GURULTU.match(satir):
+                        baslik.append(satir)
+                    continue
+                if durum != "kalem" or _SAYFA_GURULTU.match(satir):
+                    continue
+                if m := _ARA_RE.match(satir):
+                    a.ara_toplam = sayi(m["x"])
+                elif m := _KAR_RE.match(satir):
+                    a.kar_orani = round(float(m["oran"].replace(",", ".")) / 100, 4)
+                elif (m := _FIYAT_RE.match(satir)) and a.ara_toplam is not None:
+                    a.fiyat = sayi(m["x"])
+                    analizler.append(a)
+                    durum = "bekle"  # ardından gelen tarif metni atlanır
+                elif (m := _KALEM_KISA_RE.match(satir)) and poz_mu(m["poz"]):
+                    a.kalemler.append(Kalem(" ".join(grup) or None, m["poz"], "", None,
+                                            sayi(m["miktar"]), sayi(m["bf"]), sayi(m["tutar"])))
+                elif m := _ORAN_KALEM_RE.match(satir):
+                    a.kalemler.append(Kalem(" ".join(grup) or None, None, m["tanim"], None,
+                                            sayi(m["oran"]), None, sayi(m["tutar"])))
+                elif m := _KALEM_RE.match(satir):
+                    poz = m["poz"] if m["poz"] and poz_mu(m["poz"]) else None
+                    tanim = m["tanim"] if poz else f"{m['poz'] or ''} {m['tanim']}".strip()
+                    a.kalemler.append(Kalem(" ".join(grup) or None, poz, tanim, m["birim"],
+                                            sayi(m["miktar"]), sayi(m["bf"]), sayi(m["tutar"])))
+                else:
+                    if a.kalemler and grup and a.kalemler[-1].grup == " ".join(grup):
+                        grup = []  # kalemlerden sonra gelen yeni metin yeni bir grubu başlatır
+                    grup.append(satir)
+    return analizler
+
+
+def analiz_kontrol(analizler: list[Analiz]) -> dict:
+    """Okunan analizlerin tutarlılığını sayar: kalemler toplamı = ara toplam, ara toplam x (1+kâr) = fiyat."""
+    sonuc = {"toplam": len(analizler), "kalem_toplami_uyusmayan": [], "fiyat_uyusmayan": []}
+    for a in analizler:
+        t = sum(k.tutar or 0 for k in a.kalemler)
+        if a.ara_toplam is None or abs(t - a.ara_toplam) > max(0.05, a.ara_toplam * 0.001):
+            sonuc["kalem_toplami_uyusmayan"].append(a.poz_no)
+        if a.fiyat is None or a.ara_toplam is None or a.kar_orani is None or \
+                abs(a.ara_toplam * (1 + a.kar_orani) - a.fiyat) > max(0.05, a.fiyat * 0.001):
+            sonuc["fiyat_uyusmayan"].append(a.poz_no)
+    return sonuc
 
 
 # ---------------------------------------------------------------- Yükleme
