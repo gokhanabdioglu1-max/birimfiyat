@@ -71,6 +71,8 @@ def test_siniflandir():
     assert takip.siniflandir("", "https://x/2026-kas-m-elk-bf-1226.pdf") == \
         {"kurum": "CSB", "yil": 2026, "donem": "Kasım", "liste": "elektrik", "icerik": "fiyat"}
     assert takip.siniflandir("", "https://x/2026-Kas-m-n-aat-Birim-Fiyat-20261103121129.pdf")["liste"] == "insaat"
+    assert takip.siniflandir("", "https://webdosya.csb.gov.tr/v2/yfk/2026/09/2026-Eyl-l-n-aat-b-f-20260903141226.pdf") == \
+        {"kurum": "CSB", "yil": 2026, "donem": "Eylül", "liste": "insaat", "icerik": "fiyat"}
     a = takip.siniflandir("", "https://x/in-aat-analiz-1-20260115162935-20260120125449.pdf")
     assert (a["yil"], a["liste"], a["icerik"], a["parca"]) == (2026, "insaat", "analiz", 1)
 

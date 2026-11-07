@@ -173,7 +173,7 @@ def siniflandir(metin: str, url: str = "", ayar: dict | None = None) -> dict | N
     if any(h in k for h in HARIC_KELIMELER):
         return None
     analiz = "analiz" in k
-    if not (analiz or "birim fiyat" in k or "birimfiyat" in k or "fiyat listesi" in k or re.search(r"\bbf\b", k)):
+    if not (analiz or "birim fiyat" in k or "birimfiyat" in k or "fiyat listesi" in k or re.search(r"\bb ?f\b", k)):  # "bf", "b-f"
         return None
     liste = next((l for l, kalip in LISTE_KALIPLARI if kalip.search(k)), None)
     yillar = [int(y) for y in re.findall(r"(?<!\d)(20[2-9]\d)(?!\d)", k)]
