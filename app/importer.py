@@ -74,6 +74,15 @@ def sayi(deger) -> float | None:
         return None
 
 
+def _hucre_sayi(metin: str) -> float | None:
+    """Hücredeki sayı; hücreye sığmayıp iki satıra bölünmüş sayıları da birleştirir
+    ("10.063.056,5 9" -> 10063056.59)."""
+    v = sayi(metin)
+    if v is None and metin and re.fullmatch(r"[\d.,]+(?: [\d.,]+)+", metin):
+        v = sayi(metin.replace(" ", ""))
+    return v
+
+
 def poz_mu(deger) -> bool:
     return isinstance(deger, str) and bool(POZ_RE.match(deger.strip()))
 
@@ -160,9 +169,12 @@ def excel_oku(yol: Path) -> list[Satir]:
 
 # ---------------------------------------------------------------- PDF
 
+_FIYAT2 = r"\d{1,3}(?:\.\d{3})*,\d{2}"
+# "POZ tanım [birim] fiyat [montaj]"; montaj yalnızca tesisat sayfalarında ("Montaj Bedeli" sütunu)
 PDF_SATIR_RE = re.compile(
-    r"^(?P<poz>\S+)\s+(?P<tanim>.+?)\s+(?P<birim>\S+)\s+(?P<fiyat>\d{1,3}(?:\.\d{3})*,\d{2})$"
+    rf"^(?P<poz>\S+)\s+(?P<tanim>.+?)(?:\s+(?P<birim>[^\d\s]\S*))?\s+(?P<fiyat>{_FIYAT2})(?:\s+(?P<montaj>{_FIYAT2}))?$"
 )
+_OLCU_RE = re.compile(r"\(\s*Ölçü\s*:\s*([^)]+?)\.?:?\s*\)", re.I)
 
 
 def pdf_oku(yol: Path) -> list[Satir]:
@@ -178,10 +190,25 @@ def pdf_oku(yol: Path) -> list[Satir]:
     sonuc: list[Satir] = []
     basliklar: dict = {}  # sütun başlıkları; başlıksız sayfalar öncekini kullanır
     with pdfplumber.open(yol) as pdf:
-        for sayfa in pdf.pages:
+        for sayfa in _sayfalar(pdf):
             satirlar = _pdf_tablo_sayfasi(sayfa, basliklar)
+            if satirlar is None:
+                satirlar = _pdf_konum_sayfasi(sayfa, basliklar)
             sonuc.extend(satirlar if satirlar is not None else _pdf_metin_sayfasi(sayfa, sonuc))
     return sonuc
+
+
+def _sayfalar(pdf):
+    """Sayfaları sırayla verir ve her sayfadan sonra belleği bırakır.
+
+    pdfplumber okunan sayfaları önbellekte tutar; 700 sayfalık bir kitapta bu
+    birkaç GB'a çıkıp bilgisayarı yavaşlatabiliyor.
+    """
+    for sayfa in pdf.pages:
+        try:
+            yield sayfa
+        finally:
+            sayfa.close()
 
 
 def _kumele(degerler, tolerans):
@@ -244,8 +271,60 @@ def _pdf_tablo_sayfasi(sayfa, basliklar: dict | None = None) -> list[Satir] | No
     sonuc = []
     for h in bantlar:
         if poz_mu(h[p]):
-            sonuc.append(Satir(h[p], h[t], (h[b] if b is not None else "") or None, sayi(h[f]),
-                               sayi(h[m]) if m is not None else None))
+            sonuc.append(Satir(h[p], h[t], (h[b] if b is not None else "") or None, _hucre_sayi(h[f]),
+                               _hucre_sayi(h[m]) if m is not None else None))
+    return sonuc
+
+
+def _pdf_konum_sayfasi(sayfa, basliklar: dict) -> list[Satir] | None:
+    """Sütun çizgisi olan ama satır çizgisi olmayan sayfaları okur.
+
+    Uzun tanımlar poz satırının üstüne ve altına taşar; her tanım satırı dikeyde
+    en yakın poz satırına bağlanır. Kalın yazılmış satırlar bölüm başlığıdır, atlanır.
+    """
+    dikey = [r for r in sayfa.rects if r["width"] < 2 and r["height"] > 50]
+    sinir = _kumele([r["x0"] for r in dikey], 3)
+    if len(sinir) < 4:
+        return None
+    kelimeler = sayfa.extract_words(extra_attrs=["fontname"])
+    satirlar = []  # (y, [hücre metinleri], kalın mı)
+    for y in _kumele([w["top"] for w in kelimeler], 2):
+        hucre = [[] for _ in range(len(sinir) - 1)]
+        kalin = True
+        for w in kelimeler:
+            if abs(w["top"] - y) <= 2:
+                orta = (w["x0"] + w["x1"]) / 2
+                for i in range(len(hucre)):
+                    if sinir[i] - 2 <= orta < sinir[i + 1] + 2:
+                        hucre[i].append(w)
+                        kalin = kalin and "bold" in w["fontname"].lower()
+                        break
+        if any(hucre):
+            satirlar.append((y, [_satir_metni(h) for h in hucre], kalin))
+    ilk_poz = next((i for i, (_, h, _) in enumerate(satirlar) if any(poz_mu(x) for x in h)), len(satirlar))
+    if ilk_poz:
+        ust = [" ".join(h[i] for _, h, _ in satirlar[:ilk_poz]) for i in range(len(sinir) - 1)]
+        if any("fiyat" in katla(x) or "montaj" in katla(x) for x in ust):
+            basliklar.clear()
+            basliklar.update({len(ust): ust})
+    roller = _sutun_rolleri([h for _, h, _ in satirlar], basliklar.get(len(sinir) - 1))
+    if roller is None:
+        return None
+    p, t, b, f, m = roller
+    pozlar = [(y, h) for y, h, _ in satirlar if poz_mu(h[p])]
+    if not pozlar:
+        return []
+    parcalar: dict[int, list] = {i: [(y, h[t])] for i, (y, h) in enumerate(pozlar) if h[t]}
+    for y, h, kalin in satirlar[ilk_poz:]:
+        if poz_mu(h[p]) or kalin or not h[t]:
+            continue
+        en_yakin = min(range(len(pozlar)), key=lambda i: abs(pozlar[i][0] - y))
+        parcalar.setdefault(en_yakin, []).append((y, h[t]))
+    sonuc = []
+    for i, (y, h) in enumerate(pozlar):
+        tanim = " ".join(x for _, x in sorted(parcalar.get(i, [])))
+        sonuc.append(Satir(h[p], tanim, h[b] if b is not None and h[b] else None, _hucre_sayi(h[f]),
+                           _hucre_sayi(h[m]) if m is not None else None))
     return sonuc
 
 
@@ -262,12 +341,14 @@ def _sutun_rolleri(bantlar: list[list[str]], baslik: list[str] | None = None):
     if poz_say[p] == 0:
         return None
     satirlar = [h for h in bantlar if poz_mu(h[p])]
-    birim_say = [sum(birim_mi(h[i]) or bool(re.fullmatch(r"\d+ \S+", h[i]) and birim_mi(h[i].split()[1]))
+    # "Ad", "m²" gibi tam birimler 2 puan; "100 m²", "1000 Ad" gibi katlı birimler 1 puan
+    # (tanımı "1000 KW" olan satırlarda tanım sütunu birim sanılmasın)
+    birim_say = [sum(2 * birim_mi(h[i]) + bool(re.fullmatch(r"\d+ \S+", h[i]) and birim_mi(h[i].split()[1]))
                      for h in satirlar) if i != p else -1 for i in range(n)]
     b = max(range(n), key=birim_say.__getitem__)
     if birim_say[b] < len(satirlar) * 0.3:
         b = None
-    sayisal = [i for i in range(n) if i not in (p, b) and sum(sayi(h[i]) is not None for h in satirlar) >= len(satirlar) * 0.3]
+    sayisal = [i for i in range(n) if i not in (p, b) and sum(_hucre_sayi(h[i]) is not None for h in satirlar) >= len(satirlar) * 0.3]
     if not sayisal:
         return None
     m = None
@@ -293,18 +374,49 @@ def _satir_metni(kelimeler) -> str:
     return re.sub(r"\s+", " ", " ".join(w["text"] for w in kelimeler)).strip()
 
 
-def _pdf_metin_sayfasi(sayfa, onceki: list[Satir]) -> list[Satir]:
+def _pdf_metin_sayfasi(sayfa, onceki: list[Satir] | None = None) -> list[Satir]:
+    """Tablo çizgisi olmayan sayfaları satır satır okur (ör. yıl başı birim fiyat kitabı).
+
+    - Poz satırı: "POZ tanım [birim] fiyat [montaj bedeli]"
+    - Fiyatsız poz satırı bir grup başlığıdır ("35.135.3500 ... Sayaçlar: (Ölçü: Ad.)");
+      altındaki açıklama atlanır, "(Ölçü: Ad.)" birimi birimsiz pozlara verilir.
+    - Fiyatlı pozun altındaki satırlar tanımın devamıdır.
+    - Sayfa kenarındaki dikey "Sıra No" harfleri poz hizasının solunda kalır, atlanır.
+    """
+    kelimeler = sayfa.extract_words()
+    poz_x = [w["x0"] for w in kelimeler if re.fullmatch(r"\d{2}\.\d{3}\.\d{4}", w["text"])]
+    if poz_x:
+        sol = min(poz_x) - 0.5
+        sayfa = sayfa.filter(lambda o: o.get("object_type") != "char" or o["x0"] >= sol)
+    metin = sayfa.extract_text() or ""
+    montajli = "montaj" in katla(metin)  # başlık "Montaj / Bedeli" diye bölünebiliyor
+    birim_sutunu = "birimi" in katla(metin)  # inşaat: "Ölçü Birimi"; tesisat sayfalarında birim sütunu yok
     sonuc: list[Satir] = []
-    for satir in (sayfa.extract_text() or "").splitlines():
+    son: Satir | None = None       # tanımı devam eden poz
+    grup_birimi: str | None = None
+    for satir in metin.splitlines():
         satir = satir.strip()
+        if not satir:
+            continue
+        ilk = satir.split()[0]
         m = PDF_SATIR_RE.match(satir)
         if m and poz_mu(m["poz"]):
-            tanim, birim = m["tanim"], m["birim"]
-            if not birim_mi(birim):  # birim sütunu boşsa son kelime tanıma aittir
+            tanim, birim, fiyat, montaj = m["tanim"], m["birim"], m["fiyat"], m["montaj"]
+            if montaj and not montajli:  # montaj sütunu olmayan sayfada sondaki sayı fiyattır
+                tanim = " ".join(x for x in (tanim, birim, fiyat) if x)
+                birim, fiyat, montaj = None, montaj, None
+                if birim_mi(tanim.rsplit(" ", 1)[-1]):
+                    tanim, birim = tanim.rsplit(" ", 1)
+            if birim and (not birim_mi(birim) or not birim_sutunu):  # birim sütunu yoksa son kelime tanıma aittir
                 tanim, birim = f"{tanim} {birim}", None
-            sonuc.append(Satir(m["poz"], tanim, birim, sayi(m["fiyat"])))
-        elif (sonuc or onceki) and satir and not poz_mu(satir.split()[0]) and not _sayfa_ustu(satir):
-            (sonuc or onceki)[-1].tanim += " " + satir
+            son = Satir(m["poz"], tanim, birim or grup_birimi, sayi(fiyat), sayi(montaj) if montaj else None)
+            sonuc.append(son)
+        elif poz_mu(ilk):  # fiyatsız poz satırı: grup başlığı
+            o = _OLCU_RE.search(satir)
+            grup_birimi = o.group(1).strip() if o else grup_birimi
+            son = None
+        elif son is not None and not _sayfa_ustu(satir):
+            son.tanim += " " + satir
     return sonuc
 
 
@@ -340,10 +452,15 @@ _KALEM_RE = re.compile(rf"^(?:(?P<poz>\S+)\s+)?(?P<tanim>.*?)\s+(?P<birim>\S+)\s
 _KALEM_KISA_RE = re.compile(rf"^(?P<poz>\S+)\s+(?P<miktar>{_SAYI})\s+(?P<bf>{_SAYI})\s+(?P<tutar>{_SAYI})$")
 # Ara toplam üzerinden oranlı kalem: "Toplam* 0,03 34,87" (%3 şablon, çalışma sehpası vb.)
 _ORAN_KALEM_RE = re.compile(rf"^(?P<tanim>\D.*?)\s+(?P<oran>0,\d+)\s+(?P<tutar>{_SAYI})$")
-_ARA_RE = re.compile(rf"^Malzeme\s*\+\s*İşçilik Tutarı\s+(?P<x>{_SAYI})$", re.I)
-_KAR_RE = re.compile(rf"^(?P<oran>\d+(?:,\d+)?)\s*%\s*Yüklenici k[âa]rı.*?\s(?P<x>{_SAYI})$", re.I)
-_FIYAT_RE = re.compile(rf"^(?:\d+\s+)?\S+(?:\s\S+)?\s+Fiyatı\s+(?P<x>{_SAYI})$")
-_SAYFA_GURULTU = re.compile(r"^(Genel Fiyat Analizi|\d{1,2}\.\d{2}\.\d{4}|-\s*\d+\s*-|Poz No Tanımı.*)$")
+# Toplam satırları: inşaat ("Malzeme + İşçilik Tutarı", "25 % Yüklenici kârı...", "1 m³ Fiyatı")
+# ve tesisat ("Kârsız Malzeme ve Montaj (TL)", "% 25 Yüklenici Kârı ve Montaj Bedeli (TL)",
+# "Genel Giderler Dahil Birim Fiyat (TL)") analizleri
+_ARA_RE = re.compile(rf"^(?:Malzeme\s*\+\s*İşçilik Tutarı|K[âa]rsız Malzeme ve Montaj(?: \(TL\))?)\s+(?P<x>{_SAYI})$", re.I)
+_KAR_RE = re.compile(rf"^(?:(?P<oran>\d+(?:,\d+)?)\s*%|%\s*(?P<oran2>\d+(?:,\d+)?))\s*Yüklenici k[âa]rı.*?\s(?P<x>{_SAYI})$", re.I)
+_FIYAT_RE = re.compile(rf"^(?:(?:\d+\s+)?\S+(?:\s\S+)?\s+Fiyatı|Genel Giderler Dahil Birim Fiyat(?: \(TL\))?)\s+(?P<x>{_SAYI})$")
+_SAYFA_GURULTU = re.compile(r"^(Genel Fiyat Analizi|(?:Mekanik|Elektrik) Tesisat(?:ı)? Birim Fiyat Analizi|"
+                            r"\d{1,2}\.\d{2}\.\d{4}|-\s*\d+\s*-|Poz No Tanımı.*|Ölçü Malzeme Montaj Tutarı|"
+                            r"Birimi Tutarı \(TL\) \(TL\)|K[âa]rsız Toplam.*)$")
 
 
 def analiz_oku(yol: Path) -> list[Analiz]:
@@ -367,9 +484,13 @@ def analiz_oku(yol: Path) -> list[Analiz]:
     baslik: list[str] = []
     grup: list[str] = []
     a: Analiz | None = None
+    tesisat_bicimi = False   # "Malzeme Bileşenleri / Montaj Bileşenleri" düzeni
 
     def baslik_coz(satirlar: list[str]) -> Analiz | None:
-        i = next((i for i, x in enumerate(satirlar) if poz_mu(x.split()[0])), None)
+        # Önce tam ÇŞİDB biçimi (25.452.2101); ad "10.000 m³/h ..." diye başlayabildiği için
+        i = next((i for i, x in enumerate(satirlar) if re.fullmatch(r"\d{2}\.\d{3}\.\d{4}", x.split()[0])), None)
+        if i is None:
+            i = next((i for i, x in enumerate(satirlar) if poz_mu(x.split()[0])), None)
         if i is None:
             return None
         parcalar = satirlar[i].split()
@@ -383,13 +504,13 @@ def analiz_oku(yol: Path) -> list[Analiz]:
         return Analiz(poz, re.sub(r"\s+", " ", ad).strip(), birim, [])
 
     with pdfplumber.open(yol) as pdf:
-        for sayfa in pdf.pages:
+        for sayfa in _sayfalar(pdf):
             for satir in (sayfa.extract_text() or "").splitlines():
                 satir = satir.strip()
                 if not satir:
                     continue
                 if satir.startswith("Poz No Analizin Adı"):
-                    durum, baslik, a = "baslik", [], None
+                    durum, baslik, a, tesisat_bicimi = "baslik", [], None, False
                     continue
                 if durum == "baslik":
                     if satir.startswith("Poz No Tanımı"):
@@ -403,7 +524,7 @@ def analiz_oku(yol: Path) -> list[Analiz]:
                 if m := _ARA_RE.match(satir):
                     a.ara_toplam = sayi(m["x"])
                 elif m := _KAR_RE.match(satir):
-                    a.kar_orani = round(float(m["oran"].replace(",", ".")) / 100, 4)
+                    a.kar_orani = round(float((m["oran"] or m["oran2"]).replace(",", ".")) / 100, 4)
                 elif (m := _FIYAT_RE.match(satir)) and a.ara_toplam is not None:
                     a.fiyat = sayi(m["x"])
                     analizler.append(a)
@@ -419,9 +540,13 @@ def analiz_oku(yol: Path) -> list[Analiz]:
                     tanim = m["tanim"] if poz else f"{m['poz'] or ''} {m['tanim']}".strip()
                     a.kalemler.append(Kalem(" ".join(grup) or None, poz, tanim, m["birim"],
                                             sayi(m["miktar"]), sayi(m["bf"]), sayi(m["tutar"])))
+                elif (tesisat_bicimi and a.kalemler and a.kalemler[-1].grup == " ".join(grup)
+                      and not satir.endswith(("Bileşenleri", ":"))):
+                    a.kalemler[-1].tanim += " " + satir  # tesisat analizlerinde tanım rakamların altına taşar
                 else:
                     if a.kalemler and grup and a.kalemler[-1].grup == " ".join(grup):
                         grup = []  # kalemlerden sonra gelen yeni metin yeni bir grubu başlatır
+                    tesisat_bicimi = tesisat_bicimi or satir.endswith("Bileşenleri")
                     grup.append(satir)
     return analizler
 

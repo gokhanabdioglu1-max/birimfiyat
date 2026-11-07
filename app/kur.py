@@ -14,6 +14,9 @@ from . import importer
 from .db import AYLAR, baglan, katla
 
 CSV_KLASORU = Path(__file__).resolve().parent.parent / "veri" / "csv"
+# Telif uyarılı Bakanlık kitaplarından (yıl başı kitabı, analizler) okunan veriler: yalnızca kurumun
+# kendi bilgisayarında durur, herkese açık repoya konmaz (.gitignore)
+OZEL_KLASORU = Path(__file__).resolve().parent.parent / "veri" / "ozel"
 _DONEM_ADI = {katla(a): a for a in AYLAR}
 
 
@@ -95,7 +98,8 @@ def dosya_yukle(con, yol: Path) -> int:
 def hepsini_yukle(con=None, sadece_eksikler=False, klasor: Path | None = None) -> int:
     con = con or baglan()
     toplam = 0
-    for yol in sorted((klasor or CSV_KLASORU).glob("*.csv")):
+    klasorler = [klasor] if klasor else [CSV_KLASORU, OZEL_KLASORU]
+    for yol in sorted(y for k in klasorler if k.exists() for y in k.glob("*.csv")):
         b = dosya_adini_coz(yol.name)
         if b is None:
             continue

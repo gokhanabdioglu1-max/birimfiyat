@@ -51,10 +51,23 @@ Elle çalıştırmak için: `python -m app.takip`
 Dosya adı biçimi: `KURUM_YIL_DONEM_LISTE.csv`, analizler için `..._analiz.csv`
 (DONEM: `Yilbasi`, `Ocak` … `Aralik`; LISTE: `insaat`, `tesisat`, `elektrik`).
 
-| Dosya | Kaynak | Poz |
+Kaynak: Çevre, Şehircilik ve İklim Değişikliği Bakanlığı Yüksek Fen Kurulu (webdosya.csb.gov.tr).
+Her liste PDF'ten okunduktan sonra her pozun fiyatı (tesisat listelerinde montaj bedeliyle birlikte)
+PDF metniyle tek tek karşılaştırılarak doğrulanmıştır.
+
+| Liste | Dönemler (`veri/csv`, repoda) | Poz |
 |---|---|---|
-| `CSB_2026_Kasim_insaat.csv` | ÇŞİDB 2026 Kasım ayı güncel inşaat birim fiyatları (TÜİK endeksleriyle) | 1.878 |
-| `CSB_2026_Kasim_elektrik.csv` | ÇŞİDB 2026 Kasım ayı güncel elektrik tesisat birim fiyatları ve montaj bedelleri | 5.911 |
+| İnşaat | 2025 Eylül; 2026 Şubat–Kasım (aylık) | 1.818 / 1.878 |
+| Mekanik tesisat | 2025 Eylül; 2026 Şubat, Mart, Haziran, Temmuz, Eylül | 5.638 / 5.680 |
+| Elektrik tesisat | 2026 Kasım | 5.911 |
+
+Aylık güncel listeler Eylül 2025'te başlamıştır; daha önceki aylarda yıl başı fiyatları geçerlidir.
+
+**`veri/ozel` (repoda yok):** Yıl başı birim fiyat kitapları (2025, 2026; inşaat, mekanik, elektrik,
+rayiçler) ve analiz kitapları. Bu kitaplarda Bakanlığın "Tüm hakları saklıdır" uyarısı bulunduğu için
+herkese açık repoya konmaz; kurumun kendi bilgisayarında `veri/ozel` klasöründe durur. Platform bu
+klasörü de okur. Otomatik takip, eksik kitapları (diğer analiz ciltleri gibi) Bakanlık sitesinden
+bulup bilgisayarınızda bu şekilde işler.
 
 Tesisat listelerinde iki fiyat vardır: **Birim Fiyat** (montaj dahil) ve **Montaj Bedeli**
 (birim fiyatın içindeki montaj payı). Platform ikisini de saklar ve gösterir.

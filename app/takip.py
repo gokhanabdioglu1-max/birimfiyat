@@ -294,6 +294,13 @@ def calistir(con=None, ayar: dict | None = None, istek=_istek, gunluk=print,
         onceki = kayit.get(b.url, {})
         if onceki.get("durum") in ("yuklendi", "reddedildi"):
             continue  # işlenmiş dosya; reddedilen dosya aynı kalacağı için tekrar denenmez
+        ad_ = kur.dosya_adi(s["kurum"], s["yil"], s["donem"], s["liste"], s["icerik"], s.get("parca", 0))
+        hazir = next((k / ad_ for k in (csv_klasoru, kur.OZEL_KLASORU) if (k / ad_).exists()), None)
+        if hazir:
+            # Bu liste platformla birlikte hazır geliyor (doğrulanmış); yeniden indirilmez
+            kayit[b.url] = {"durum": "yuklendi", "mesaj": f"{hazir.name} hazır veri", "metin": b.metin[:200],
+                            "tarih": datetime.now().isoformat(timespec="seconds"), **s}
+            continue
         ad = re.sub(r"[^\w.\-]", "_", urllib.parse.unquote(b.url.rsplit("/", 1)[-1]))[:120]
         yol = indirme_klasoru / ad
         try:

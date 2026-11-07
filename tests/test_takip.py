@@ -35,6 +35,7 @@ ALT = """<html><body>
 @pytest.fixture
 def ortam(tmp_path, monkeypatch):
     monkeypatch.setattr(takip, "DURUM_DOSYASI", tmp_path / "durum.json")
+    monkeypatch.setattr(kur, "OZEL_KLASORU", tmp_path / "ozel")  # gerçek veri klasörü testleri etkilemesin
     istekler = []
     dosyalar = {
         "https://yfk.csb.gov.tr/": ANA.encode(),
@@ -102,6 +103,7 @@ def test_takip_turu(ortam):
 
 def test_site_kapali(tmp_path, monkeypatch):
     monkeypatch.setattr(takip, "DURUM_DOSYASI", tmp_path / "durum.json")
+    monkeypatch.setattr(kur, "OZEL_KLASORU", tmp_path / "ozel")
     def istek(url): raise OSError("Connection reset")
     ozet = takip.calistir(baglan(tmp_path / "t.db"), dict(takip.VARSAYILAN_AYAR), istek, lambda *_: None,
                           tmp_path / "csv", tmp_path / "ind")
@@ -158,3 +160,11 @@ GERCEK_DOSYA_ADLARI = [  # Bakanlık sunucusundaki gerçek adlar -> (yıl, döne
 def test_gercek_dosya_adlari(ad, beklenen):
     s = takip.siniflandir("", "https://webdosya.csb.gov.tr/v2/yfk/2026/01/" + ad)
     assert (s and (s["yil"], s["donem"], s["liste"], s["icerik"])) == (beklenen or None)
+
+
+def test_hazir_liste_yeniden_indirilmez(ortam):
+    con, calistir, istekler, tmp = ortam
+    (tmp / "csv").mkdir(exist_ok=True)
+    (tmp / "csv" / "CSB_2026_Kasim_elektrik.csv").write_text("Poz No;Tanımı;Birimi;Birim Fiyatı\n", encoding="utf-8")
+    calistir()
+    assert "https://webdosya.csb.gov.tr/x/eb.xlsx" not in istekler

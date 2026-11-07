@@ -107,3 +107,33 @@ def test_hazir_csb_listesi(con):
     assert con.execute("SELECT COUNT(*) FROM poz WHERE kaynak_id=?", (e["id"],)).fetchone()[0] == 5911
     r = con.execute("SELECT fiyat, montaj FROM poz WHERE kaynak_id=? AND poz_no='35.100.1101'", (e["id"],)).fetchone()
     assert (r["fiyat"], r["montaj"]) == (35586.93, 4200.34)
+
+
+def test_bolunmus_sayi_ve_eksi():
+    assert importer._hucre_sayi("10.063.056,5 9") == 10063056.59  # hücreye sığmayıp bölünmüş fiyat
+    assert importer.sayi("-22,94") == -22.94                         # analizlerde düşülen (minha) kalem
+    assert importer.sayi("1025") == 1025.0
+
+
+def test_kitap_satiri():
+    """Yıl başı kitabı: tesisat satırında birim yok, fiyat + montaj; inşaat satırında birim + fiyat."""
+    m = importer.PDF_SATIR_RE.match("25.135.2001 Fayans: 520,00 161,25")
+    assert (m["tanim"], m["birim"], m["fiyat"], m["montaj"]) == ("Fayans:", None, "520,00", "161,25")
+    m = importer.PDF_SATIR_RE.match("15.235.1027 15 cm kalınlığındaki EPS bloklar ile duvar yapılması m² 759,80")
+    assert (m["birim"], m["fiyat"], m["montaj"]) == ("m²", "759,80", None)
+
+
+def test_sutun_rolleri_kw_tanimlari():
+    """Tanımı "1000 KW" olan satırlarda tanım sütunu birim sanılmamalı."""
+    satirlar = [["25.495.21%02d" % i, f"{100 * i} KW", "Ad", "1.000,00", "50,00"] for i in range(1, 9)]
+    p, t, b, f, m = importer._sutun_rolleri(satirlar, ["Poz No", "Tanım", "Birim", "Birim Fiyat", "Montaj Bedeli"])
+    assert (p, t, b, f, m) == (0, 1, 2, 3, 4)
+
+
+def test_analiz_satir_kaliplari():
+    k = importer._KALEM_RE.match("19.100.1033 Beton vibratörü Sa -0,05 458,72 -22,94")
+    assert (k["poz"], k["birim"], k["miktar"], k["tutar"]) == ("19.100.1033", "Sa", "-0,05", "-22,94")
+    assert importer._ARA_RE.match("Kârsız Malzeme ve Montaj (TL) 75.202,50")["x"] == "75.202,50"
+    assert importer._KAR_RE.match("% 25 Yüklenici Kârı ve Montaj Bedeli (TL) 5.203,13")["oran2"] == "25"
+    assert importer._FIYAT_RE.match("Genel Giderler Dahil Birim Fiyat (TL) 94.003,13")["x"] == "94.003,13"
+    assert importer._FIYAT_RE.match("1 m³ Fiyatı 1.496,54")["x"] == "1.496,54"
